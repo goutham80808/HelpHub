@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 public class Message {
 
     public enum MessageType {
-        DIRECT, BROADCAST, STATUS, ACK
+        DIRECT, BROADCAST, STATUS, ACK, HEARTBEAT
     }
 
     private final String id;
@@ -72,36 +72,63 @@ public class Message {
      */
     public static Message fromJson(String json) {
         try {
-            // A simple regex to extract key-value pairs. It's not a full JSON parser.
-            Pattern pattern = Pattern.compile("\"(.*?)\":\"?(.*?)\"?[,}]");
-            Matcher matcher = pattern.matcher(json);
+            // --- FIX: Replaced brittle regex with a more robust manual parser ---
+            String id = extractValue(json, "id");
+            String typeStr = extractValue(json, "type");
+            String from = extractValue(json, "from");
+            String to = extractValue(json, "to");
+            String timestampStr = extractValue(json, "timestamp");
+            String body = extractValue(json, "body");
 
-            String id = null, typeStr = null, from = null, to = null, body = null;
-            long timestamp = 0;
-
-            while (matcher.find()) {
-                String key = matcher.group(1);
-                String value = matcher.group(2);
-                switch (key) {
-                    case "id": id = value; break;
-                    case "type": typeStr = value; break;
-                    case "from": from = value; break;
-                    case "to": to = value.equals("null") ? null : value; break;
-                    case "timestamp": timestamp = Long.parseLong(value.replaceAll("[^0-9]", "")); break;
-                    case "body": body = value.replace("\\\"", "\""); break;
-                }
-            }
-
-            if (id == null || typeStr == null || from == null || body == null) {
+            if (id == null || typeStr == null || from == null || body == null || timestampStr == null) {
                 return null; // Invalid format
             }
 
             MessageType type = MessageType.valueOf(typeStr);
+            long timestamp = Long.parseLong(timestampStr);
+            if (to != null && to.equals("null")) {
+                to = null;
+            }
+
             return new Message(id, type, from, to, timestamp, body);
 
         } catch (Exception e) {
-            System.err.println("Failed to parse JSON message: " + json);
-            return null; // Return null on any parsing error
+            System.err.println("Failed to parse JSON message: " + json + " | Error: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * A helper method to extract a value for a given key from a simple JSON string.
+     * Handles string values in quotes and numeric/null values.
+     */
+    private static String extractValue(String json, String key) {
+        String searchKey = "\"" + key + "\":";
+        int keyIndex = json.indexOf(searchKey);
+        if (keyIndex == -1) {
+            return null;
+        }
+
+        int valueStartIndex = keyIndex + searchKey.length();
+        char firstChar = json.charAt(valueStartIndex);
+
+        if (firstChar == '"') {
+            // It's a string value, find the closing quote, ignoring escaped ones
+            int endIndex = valueStartIndex + 1;
+            while (endIndex < json.length()) {
+                if (json.charAt(endIndex) == '"' && json.charAt(endIndex - 1) != '\\') {
+                    break;
+                }
+                endIndex++;
+            }
+            return json.substring(valueStartIndex + 1, endIndex).replace("\\\"", "\"");
+        } else {
+            // It's a number or null
+            int endIndex = valueStartIndex;
+            while (endIndex < json.length() && json.charAt(endIndex) != ',' && json.charAt(endIndex) != '}') {
+                endIndex++;
+            }
+            return json.substring(valueStartIndex, endIndex);
         }
     }
 
@@ -114,6 +141,16 @@ public class Message {
      */
     public static Message createAck(String fromClientId, String acknowledgedMessageId) {
         return new Message(MessageType.ACK, fromClientId, null, acknowledgedMessageId);
+    }
+
+    /**
+     * Creates a simple HEARTBEAT message.
+     * The body is a simple ping payload.
+     * @param fromClientId The client sending the heartbeat.
+     * @return A new Message object of type HEARTBEAT.
+     */
+    public static Message createHeartbeat(String fromClientId) {
+        return new Message(MessageType.HEARTBEAT, fromClientId, null, "ping");
     }
 
     /**

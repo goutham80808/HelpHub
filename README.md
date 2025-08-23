@@ -27,6 +27,26 @@ The system is now resilient to client disconnects. The server uses an SQLite dat
 7.  **Restart the `bravo` client**.
 8.  **Observe**: As soon as `bravo` connects, it will immediately receive both the direct message and the broadcast message it missed, tagged as `(delayed)`.
 
+## Phase 4: Reliability Enhancements
+
+The system is now hardened against unstable network connections.
+
+### Features
+-   **Heartbeats**: Clients send a "ping" message to the server every 15 seconds to signal they are still online.
+-   **Zombie Connection Cleanup**: The server will automatically disconnect clients that have not sent a heartbeat for 45 seconds, freeing up resources.
+-   **Automatic Reconnect**: If a client loses its connection to the server, it will automatically try to reconnect. It uses an "exponential backoff" strategy, waiting 1s, then 2s, 4s, and so on (up to a 30s max), to avoid overwhelming the server.
+
+### Configuration
+These reliability features can be tuned in the `src/main/resources/config.properties` file without needing to recompile the code.
+
+### How to Test Auto-Reconnect
+1.  Start the server and one client.
+2.  Wait for them to connect.
+3.  **Kill the server process** (Ctrl+C in its terminal).
+4.  **Observe the client terminal**: It will print a "Connection lost" message and start counting down to a retry attempt.
+5.  **Restart the server**.
+6.  **Observe the client terminal again**: On its next attempt, it will automatically find the server and reconnect successfully. Any messages that were queued for it on the server will be delivered.
+
 ### Database Schema
 -   **`clients`**: Stores client IDs and their last seen timestamp.
 -   **`messages`**: Stores message details, including `from_client`, `to_client`, `status` (`PENDING`/`DELIVERED`), and content.
