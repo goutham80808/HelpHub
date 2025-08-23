@@ -9,8 +9,6 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,7 +30,6 @@ public class RelayServer {
     public static void main(String[] args) {
         new RelayServer().startServer();
     }
-
 
     public void startServer() {
         System.out.println("HelpHub Relay Server starting on port " + PORT + "...");
@@ -65,55 +62,33 @@ public class RelayServer {
         }, timeout, timeout, TimeUnit.MILLISECONDS);
     }
 
-    private void setupLogging() {
-        try {
-            Files.createDirectories(Paths.get("logs"));
-            if (!Files.exists(Paths.get(LOG_FILE_PATH))) {
-                Files.createFile(Paths.get(LOG_FILE_PATH));
-            }
-        } catch (IOException e) {
-            System.err.println("Failed to set up log file: " + e.getMessage());
-        }
-    }
-
-    private void logMessage(String jsonMessage) {
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        String logEntry = timestamp + " | " + jsonMessage + System.lineSeparator();
-        try {
-            Files.write(Paths.get(LOG_FILE_PATH), logEntry.getBytes(), StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            System.err.println("Error writing to log file: " + e.getMessage());
-        }
-    }
-
     private void routeMessage(Message message) {
-        logMessage(message.toJson());
+        // Log to console for the admin
+        String to = (message.getTo() == null) ? "ALL" : message.getTo();
+        System.out.printf("[MSG] [FROM:%s] -> [TO:%s]: %s%n", message.getFrom(), to, message.getBody());
 
-        // Step 1: Always store the message in the database first for durability.
+        // Step 1: Always store the message in the database for durability.
         database.storeMessage(message);
 
         // Step 2: Attempt immediate delivery to online clients.
         if (message.getType() == Message.MessageType.DIRECT) {
-            PrintWriter writer = clientWriters.get(message.getTo());
-            if (writer != null) {
-                writer.println(message.toJson());
-                System.out.println("Delivered direct message to online client: " + message.getTo());
+            ClientHandler handler = clientHandlers.get(message.getTo());
+            if (handler != null) {
+                handler.sendMessage(message.toJson());
+                System.out.println(" -> Delivered direct message to online client: " + message.getTo());
             } else {
-                System.out.println("Queued direct message for offline client: " + message.getTo());
+                System.out.println(" -> Queued direct message for offline client: " + message.getTo());
             }
         } else if (message.getType() == Message.MessageType.BROADCAST) {
-            for (Map.Entry<String, PrintWriter> entry : clientWriters.entrySet()) {
-                if (!entry.getKey().equals(message.getFrom())) {
-                    entry.getValue().println(message.toJson());
+            for (ClientHandler handler : clientHandlers.values()) {
+                if (!handler.getClientId().equals(message.getFrom())) {
+                    handler.sendMessage(message.toJson());
                 }
             }
-            System.out.println("Broadcast message sent to all online clients.");
+            System.out.println(" -> Broadcast message sent to all online clients.");
         }
     }
 
-    /**
-     * Handles communication for a single connected client.
-     */
     private class ClientHandler implements Runnable {
         private final Socket clientSocket;
         private String clientId;
@@ -126,6 +101,13 @@ public class RelayServer {
 
         public String getClientId() { return clientId; }
         public long getLastHeartbeatTime() { return lastHeartbeatTime; }
+
+        // Helper method to send a message to this specific client
+        public void sendMessage(String jsonMessage) {
+            if (writer != null) {
+                writer.println(jsonMessage);
+            }
+        }
 
         @Override
         public void run() {
@@ -177,7 +159,7 @@ public class RelayServer {
             if (!pending.isEmpty()) {
                 System.out.println("Sending " + pending.size() + " pending messages to " + clientId);
                 for (Message msg : pending) {
-                    writer.println(msg.toJson());
+                    sendMessage(msg.toJson());
                 }
             }
         }
