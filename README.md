@@ -1,14 +1,24 @@
-# HelpHub - Phase 1: Core Relay & Client
+# HelpHub
 
-This is the first minimal viable product (MVP) for HelpHub. It establishes a basic, multi-client chat system that operates over a local network, with all messages being broadcast to all participants and logged to a central file on the server.
+HelpHub is a disaster-resilient, offline-first communication system built in Java. It operates entirely on a local Wi-Fi hotspot or LAN without any dependency on the Internet. This enables survivors and rescue workers to send and receive messages during natural disasters or other emergency scenarios when conventional networks are down.
 
-## How to Build and Run
+## How to Build
 
 ### Prerequisites
 - Java 17 (or newer)
 - Apache Maven
 
-### 1. Build the Project
-Navigate to the project's root directory (where `pom.xml` is located) and run:
+### Build Command
+Navigate to the project's root directory (where `pom.xml` is located) and run the following command:
 ```bash
 mvn clean package
+```
+
+### 1. Run the Server
+```bash
+java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
+```
+### 2. Run Clients with IDs
+```bash
+java -cp target/helphub-0.1.0.jar com.helphub.client.Client --id args
+```

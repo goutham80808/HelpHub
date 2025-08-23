@@ -1,4 +1,7 @@
+// src/main/java/com/helphub/server/RelayServer.java
 package com.helphub.server;
+
+import com.helphub.common.Message;
 
 import java.io.*;
 import java.net.ServerSocket;
@@ -8,15 +11,15 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RelayServer {
     private static final int PORT = 5000;
     private static final String LOG_FILE_PATH = "logs/messages.log";
 
-    // A thread-safe set to store writer streams of all connected clients.
-    private final Set<PrintWriter> clientWriters = ConcurrentHashMap.newKeySet();
+    // A thread-safe Map to store client IDs and their corresponding writers.
+    private final Map<String, PrintWriter> clientWriters = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         new RelayServer().startServer();
@@ -29,13 +32,9 @@ public class RelayServer {
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server is listening for connections.");
             while (true) {
-                // Accept a new client connection. This call blocks until a connection is made.
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("New client connected: " + clientSocket.getRemoteSocketAddress());
-
-                // Create a handler for the new client and start it in a new thread.
-                ClientHandler handler = new ClientHandler(clientSocket);
-                new Thread(handler).start();
+                System.out.println("New client connecting: " + clientSocket.getRemoteSocketAddress());
+                new Thread(new ClientHandler(clientSocket)).start();
             }
         } catch (IOException e) {
             System.err.println("Error starting the server: " + e.getMessage());
@@ -54,9 +53,9 @@ public class RelayServer {
         }
     }
 
-    private void logMessage(String message) {
+    private void logMessage(String jsonMessage) {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        String logEntry = timestamp + " | " + message + System.lineSeparator();
+        String logEntry = timestamp + " | " + jsonMessage + System.lineSeparator();
         try {
             Files.write(Paths.get(LOG_FILE_PATH), logEntry.getBytes(), StandardOpenOption.APPEND);
         } catch (IOException e) {
@@ -64,20 +63,41 @@ public class RelayServer {
         }
     }
 
-    private void broadcastMessage(String message, PrintWriter excludeWriter) {
-        logMessage(message);
-        for (PrintWriter writer : clientWriters) {
-            if (writer != excludeWriter) {
-                writer.println(message);
+    private void routeMessage(String jsonMessage) {
+        logMessage(jsonMessage);
+        Message message = Message.fromJson(jsonMessage);
+
+        if (message == null) {
+            System.err.println("Received malformed message, could not route.");
+            return;
+        }
+
+        if (message.getType() == Message.MessageType.DIRECT) {
+            // Direct message: send only to the recipient
+            PrintWriter writer = clientWriters.get(message.getTo());
+            if (writer != null) {
+                writer.println(jsonMessage);
+            } else {
+                System.out.println("Client '" + message.getTo() + "' not found. Message from '" + message.getFrom() + "' dropped.");
+                // Optional: send a 'user not found' status message back to the sender
+            }
+        } else {
+            // Broadcast or Status message: send to everyone except the sender
+            for (Map.Entry<String, PrintWriter> entry : clientWriters.entrySet()) {
+                if (!entry.getKey().equals(message.getFrom())) {
+                    entry.getValue().println(jsonMessage);
+                }
             }
         }
     }
 
+
     /**
-     * Handles communication for a single connected client in its own thread.
+     * Handles communication for a single connected client.
      */
     private class ClientHandler implements Runnable {
         private final Socket clientSocket;
+        private String clientId;
         private PrintWriter writer;
 
         public ClientHandler(Socket socket) {
@@ -87,31 +107,38 @@ public class RelayServer {
         @Override
         public void run() {
             try (
-                    InputStream input = clientSocket.getInputStream();
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(input));
-                    OutputStream output = clientSocket.getOutputStream();
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
             ) {
-                this.writer = new PrintWriter(output, true);
-                clientWriters.add(writer);
+                // The first line from the client MUST be its client ID.
+                this.clientId = reader.readLine();
+                if (this.clientId == null || this.clientId.trim().isEmpty() || clientWriters.containsKey(this.clientId)) {
+                    System.out.println("Client failed to provide a valid or unique ID. Disconnecting.");
+                    return; // Close connection
+                }
 
-                String clientMessage;
-                while ((clientMessage = reader.readLine()) != null) {
-                    System.out.println("Received from " + clientSocket.getRemoteSocketAddress() + ": " + clientMessage);
-                    broadcastMessage(clientMessage, writer);
+                this.writer = new PrintWriter(clientSocket.getOutputStream(), true);
+                clientWriters.put(this.clientId, this.writer);
+                System.out.println("Client '" + this.clientId + "' connected successfully.");
+
+                // Process subsequent messages
+                String jsonMessage;
+                while ((jsonMessage = reader.readLine()) != null) {
+                    System.out.println("Routing message from '" + this.clientId + "'");
+                    routeMessage(jsonMessage);
                 }
 
             } catch (IOException e) {
-                // This exception typically occurs when the client disconnects.
-                System.out.println("Client " + clientSocket.getRemoteSocketAddress() + " disconnected.");
+                System.out.println("Client '" + this.clientId + "' disconnected.");
             } finally {
                 // Clean up resources for this client.
-                if (writer != null) {
-                    clientWriters.remove(writer);
+                if (this.clientId != null) {
+                    clientWriters.remove(this.clientId);
+                    System.out.println("Client '" + this.clientId + "' removed. Total clients: " + clientWriters.size());
                 }
                 try {
                     clientSocket.close();
                 } catch (IOException e) {
-                    System.err.println("Error closing client socket: " + e.getMessage());
+                    // Ignore
                 }
             }
         }
