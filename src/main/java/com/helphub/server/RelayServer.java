@@ -1,3 +1,4 @@
+// src/main/java/com/helphub/server/RelayServer.java
 package com.helphub.server;
 
 import com.helphub.common.Config;
@@ -18,7 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 public class RelayServer {
     private static final int PORT = 5000;
-
     private final Map<String, ClientHandler> clientHandlers = new ConcurrentHashMap<>();
     private final Db database;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -34,7 +34,6 @@ public class RelayServer {
     public void startServer() {
         System.out.println("HelpHub Relay Server starting on port " + PORT + "...");
         startConnectionCleanupTask();
-
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server is listening for connections.");
             while (true) {
@@ -51,8 +50,8 @@ public class RelayServer {
     private void startConnectionCleanupTask() {
         long timeout = Config.getInt("connection.timeout", 45000);
         scheduler.scheduleAtFixedRate(() -> {
-            long now = System.currentTimeMillis();
             System.out.println("Running connection cleanup task...");
+            long now = System.currentTimeMillis();
             clientHandlers.values().forEach(handler -> {
                 if (now - handler.getLastHeartbeatTime() > timeout) {
                     System.out.println("Client '" + handler.getClientId() + "' timed out. Disconnecting.");
@@ -63,14 +62,9 @@ public class RelayServer {
     }
 
     private void routeMessage(Message message) {
-        // Log to console for the admin
         String to = (message.getTo() == null) ? "ALL" : message.getTo();
         System.out.printf("[MSG] [FROM:%s] -> [TO:%s]: %s%n", message.getFrom(), to, message.getBody());
-
-        // Step 1: Always store the message in the database for durability.
         database.storeMessage(message);
-
-        // Step 2: Attempt immediate delivery to online clients.
         if (message.getType() == Message.MessageType.DIRECT) {
             ClientHandler handler = clientHandlers.get(message.getTo());
             if (handler != null) {
@@ -98,15 +92,10 @@ public class RelayServer {
         public ClientHandler(Socket socket) {
             this.clientSocket = socket;
         }
-
         public String getClientId() { return clientId; }
         public long getLastHeartbeatTime() { return lastHeartbeatTime; }
-
-        // Helper method to send a message to this specific client
         public void sendMessage(String jsonMessage) {
-            if (writer != null) {
-                writer.println(jsonMessage);
-            }
+            if (writer != null) writer.println(jsonMessage);
         }
 
         @Override
@@ -114,23 +103,19 @@ public class RelayServer {
             this.lastHeartbeatTime = System.currentTimeMillis();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))) {
                 this.clientId = reader.readLine();
-                if (clientId == null || clientId.trim().isEmpty()) { return; }
-
+                if (clientId == null || clientId.trim().isEmpty()) return;
                 this.writer = new PrintWriter(clientSocket.getOutputStream(), true);
                 clientHandlers.put(this.clientId, this);
                 database.updateClientLastSeen(clientId);
                 System.out.println("Client '" + this.clientId + "' connected. Checking for pending messages...");
                 flushPendingMessages();
-
                 String jsonMessage;
                 while ((jsonMessage = reader.readLine()) != null) {
+                    this.lastHeartbeatTime = System.currentTimeMillis();
                     Message message = Message.fromJson(jsonMessage);
                     if (message == null) continue;
-
-                    this.lastHeartbeatTime = System.currentTimeMillis(); // Any message counts as activity
-
                     if (message.getType() == Message.MessageType.HEARTBEAT) {
-                        database.updateClientLastSeen(clientId); // Update DB on heartbeat
+                        database.updateClientLastSeen(clientId);
                     } else if (message.getType() == Message.MessageType.ACK) {
                         database.updateMessageStatus(message.getBody(), "DELIVERED");
                     } else {

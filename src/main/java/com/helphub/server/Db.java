@@ -1,7 +1,7 @@
+// src/main/java/com/helphub/server/Db.java
 package com.helphub.server;
 
 import com.helphub.common.Message;
-
 import java.io.File;
 import java.sql.*;
 import java.util.ArrayList;
@@ -10,7 +10,7 @@ import java.util.List;
 public class Db {
     private static final String DEFAULT_DB_PATH = "data/emergency.db";
     private final String dbUrl;
-    private final Connection connection; // --- FIX: Use a single, persistent connection ---
+    private final Connection connection;
 
     public Db() {
         this("jdbc:sqlite:" + DEFAULT_DB_PATH);
@@ -20,33 +20,20 @@ public class Db {
     public Db(String dbUrl) {
         this.dbUrl = dbUrl;
         try {
-            this.connection = DriverManager.getConnection(this.dbUrl); // --- FIX: Establish connection once ---
+            this.connection = DriverManager.getConnection(this.dbUrl);
             initializeDatabase();
         } catch (SQLException e) {
             System.err.println("FATAL: Failed to establish database connection: " + e.getMessage());
-            throw new RuntimeException(e); // Fail fast if DB can't be reached
-        }
-    }
-
-    public void close() {
-        try {
-            if (connection != null && !connection.isClosed()) {
-                connection.close();
-            }
-        } catch (SQLException e) {
-            System.err.println("Error closing database connection: " + e.getMessage());
+            throw new RuntimeException(e);
         }
     }
 
     private void initializeDatabase() {
-        // --- FIX: Use the single connection field ---
         try (Statement stmt = this.connection.createStatement()) {
             String clientsTableSql = "CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);";
             stmt.execute(clientsTableSql);
-
             String messagesTableSql = "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, from_client TEXT NOT NULL, to_client TEXT, type TEXT NOT NULL, timestamp INTEGER NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL);";
             stmt.execute(messagesTableSql);
-
             System.out.println("Database tables initialized successfully.");
         } catch (SQLException e) {
             System.err.println("Database table initialization failed: " + e.getMessage());
@@ -56,7 +43,6 @@ public class Db {
 
     public synchronized void storeMessage(Message message) {
         String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, status) VALUES(?,?,?,?,?,?,?)";
-        // --- FIX: Use the single connection field ---
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, message.getId());
             pstmt.setString(2, message.getFrom());
@@ -73,7 +59,6 @@ public class Db {
 
     public synchronized void updateMessageStatus(String messageId, String status) {
         String sql = "UPDATE messages SET status = ? WHERE id = ?";
-        // --- FIX: Use the single connection field ---
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, status);
             pstmt.setString(2, messageId);
@@ -86,10 +71,9 @@ public class Db {
     public synchronized List<Message> getPendingMessagesForClient(String clientId) {
         List<Message> pendingMessages = new ArrayList<>();
         String sql = "SELECT * FROM messages WHERE (to_client = ? AND status = 'PENDING') OR (type = 'BROADCAST' AND status = 'PENDING' AND from_client != ?)";
-        // --- FIX: Use the single connection field ---
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, clientId);
-            pstmt.setString(2, clientId); // For the from_client != ? check
+            pstmt.setString(2, clientId);
             ResultSet rs = pstmt.executeQuery();
             while (rs.next()) {
                 Message message = Message.fromResultSet(rs);
@@ -104,10 +88,7 @@ public class Db {
     }
 
     public synchronized void updateClientLastSeen(String clientId) {
-        // This is an "UPSERT" operation: it updates if the client exists, or inserts if it doesn't.
-        String sql = "INSERT INTO clients (id, last_seen) VALUES (?, ?)" +
-                " ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen;";
-
+        String sql = "INSERT INTO clients (id, last_seen) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen;";
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, clientId);
             pstmt.setLong(2, System.currentTimeMillis());
