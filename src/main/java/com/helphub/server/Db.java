@@ -97,4 +97,30 @@ public class Db {
             System.err.println("Failed to update client last_seen: " + e.getMessage());
         }
     }
+
+    public synchronized long getPendingMessageCount() {
+        String sql = "SELECT COUNT(*) FROM messages WHERE status = 'PENDING'";
+        try (Statement stmt = this.connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            System.err.println("Failed to get pending message count: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    public synchronized long getTotalMessageCount() {
+        String sql = "SELECT COUNT(*) FROM messages";
+        try (Statement stmt = this.connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            System.err.println("Failed to get total message count: " + e.getMessage());
+        }
+        return 0;
+    }
 }

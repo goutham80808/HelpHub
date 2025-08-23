@@ -47,6 +47,31 @@ These reliability features can be tuned in the `src/main/resources/config.proper
 5.  **Restart the server**.
 6.  **Observe the client terminal again**: On its next attempt, it will automatically find the server and reconnect successfully. Any messages that were queued for it on the server will be delivered.
 
+## Phase 5: Admin Console Monitoring
+
+The server now includes an embedded Command-Line Interface (CLI) for real-time monitoring. An administrator can type commands directly into the terminal where the server is running to get immediate insights into the system's status.
+
+### How to Use
+While the `RelayServer` is running, simply type commands into its terminal and press Enter.
+
+### Available Commands
+-   **`stats` or `/stats`**
+    Displays a summary of key metrics: number of currently online clients, total messages stored in the database, and the count of messages waiting to be delivered (pending).
+
+-   **`clients` or `/clients`**
+    Lists the unique IDs of all clients currently connected to the server, along with the time of their last activity (message or heartbeat).
+
+-   **`pending <clientId>` or `/pending <clientId>`**
+    Shows all undelivered messages for a specific, named client. This is useful to check what an offline user will receive when they next connect.
+    *Example: `pending alpha`*
+
+-   **`tail <n>` or `/tail <n>`**
+    Displays the last `n` lines from the `logs/messages.log` file, showing the most recent raw message traffic. If `n` is omitted, it defaults to 10.
+    *Example: `tail 50`*
+
+-   **`help`**
+    Prints the list of available commands.
+
 ### Database Schema
 -   **`clients`**: Stores client IDs and their last seen timestamp.
 -   **`messages`**: Stores message details, including `from_client`, `to_client`, `status` (`PENDING`/`DELIVERED`), and content.
