@@ -42,8 +42,6 @@ public class Client {
             try {
                 // This method will block until the connection is lost or the user exits
                 runClient();
-
-                // If runClient returns normally (e.g., console input ends), break the loop
                 System.out.println("Client shut down gracefully.");
                 break;
             } catch (IOException e) {
@@ -67,47 +65,56 @@ public class Client {
      * Throws IOException on connection failure, which is caught by the main reconnect loop.
      */
     private static void runClient() throws IOException {
+        // --- FIX: Get a reference to the current thread (the main thread) ---
+        Thread mainClientThread = Thread.currentThread();
+
         try (
                 Socket socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
                 PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
                 BufferedReader consoleReader = new BufferedReader(new InputStreamReader(System.in))
         ) {
             System.out.println("Successfully connected to the HelpHub server.");
-
-            // First, identify the client to the server
             writer.println(clientId);
-
-            // Start sending periodic heartbeats
             startHeartbeat(writer);
 
-            // Start a separate thread to listen for messages from the server
-            new Thread(new ServerListener(socket, writer)).start();
+            // --- FIX: Pass the main thread reference to the listener ---
+            new Thread(new ServerListener(socket, writer, mainClientThread)).start();
 
             System.out.println("Commands: /to <id> <msg>, /all <msg>. Press Ctrl+C to exit.");
 
-            // Main thread loop to read console input and send to server
             String userInput;
-            while ((userInput = consoleReader.readLine()) != null) {
-                Message message;
-                if (userInput.startsWith("/to ")) {
-                    String[] parts = userInput.split(" ", 3);
-                    if (parts.length == 3) {
-                        message = new Message(Message.MessageType.DIRECT, clientId, parts[1], parts[2]);
+            // --- FIX: Catch the InterruptedException that the listener will trigger ---
+            try {
+                while ((userInput = consoleReader.readLine()) != null) {
+                    Message message;
+                    if (userInput.startsWith("/to ")) {
+                        String[] parts = userInput.split(" ", 3);
+                        if (parts.length == 3) {
+                            message = new Message(Message.MessageType.DIRECT, clientId, parts[1], parts[2]);
+                            writer.println(message.toJson());
+                        } else {
+                            System.out.println("Invalid format. Use: /to <recipientId> <message>");
+                        }
+                    } else if (userInput.startsWith("/all ")) {
+                        String body = userInput.substring(5);
+                        message = new Message(Message.MessageType.BROADCAST, clientId, null, body);
                         writer.println(message.toJson());
                     } else {
-                        System.out.println("Invalid format. Use: /to <recipientId> <message>");
+                        message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput);
+                        writer.println(message.toJson());
                     }
-                } else if (userInput.startsWith("/all ")) {
-                    String body = userInput.substring(5);
-                    message = new Message(Message.MessageType.BROADCAST, clientId, null, body);
-                    writer.println(message.toJson());
-                } else {
-                    message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput);
-                    writer.println(message.toJson());
                 }
+            } catch (IOException e) {
+                // This will catch the interrupt and allow us to exit runClient gracefully
+                // Check if the cause is an InterruptedIOException, which is what readLine() throws on interrupt
+                if (e instanceof InterruptedIOException || (e.getCause() != null && e.getCause() instanceof InterruptedException)) {
+                    // This is the expected interruption from the listener thread
+                    throw new IOException("Connection listener failed, triggering reconnect.", e);
+                }
+                // Rethrow other unexpected IOExceptions
+                throw e;
             }
         } finally {
-            // This block executes when the try-with-resources closes, i.e., on disconnect
             stopHeartbeat();
         }
     }
@@ -118,10 +125,11 @@ public class Client {
         int interval = Config.getInt("heartbeat.interval", 15000);
 
         heartbeatExecutor.scheduleAtFixedRate(() -> {
-            // Don't wrap in try-catch; we WANT this to fail if the connection is dead
-            // so the main loop can detect it and start the reconnect process.
             if (!writer.checkError()) {
                 writer.println(Message.createHeartbeat(clientId).toJson());
+            } else {
+                // If writer has an error, the pipe is broken. Interrupt the main thread.
+                Thread.currentThread().getThreadGroup().getParent().interrupt();
             }
         }, interval, interval, TimeUnit.MILLISECONDS);
     }
@@ -147,10 +155,14 @@ public class Client {
     private static class ServerListener implements Runnable {
         private final Socket socket;
         private final PrintWriter writer;
+        // --- FIX: Add a field for the main thread ---
+        private final Thread mainThreadToInterrupt;
 
-        public ServerListener(Socket socket, PrintWriter writer) {
+        // --- FIX: Update constructor to accept the main thread ---
+        public ServerListener(Socket socket, PrintWriter writer, Thread mainThreadToInterrupt) {
             this.socket = socket;
             this.writer = writer;
+            this.mainThreadToInterrupt = mainThreadToInterrupt;
         }
 
         @Override
@@ -175,11 +187,10 @@ public class Client {
                     }
                 }
             } catch (IOException e) {
-                // This exception is expected when the socket is closed by the main thread
-                // or when the server connection is lost. The main reconnect loop will handle it.
-                if (!socket.isClosed()) {
-                    // We don't print an error here anymore because the main loop does.
-                }
+                // This is the critical failure point. The server connection is gone.
+                // --- FIX: INTERRUPT THE MAIN THREAD TO UN-BLOCK IT ---
+                System.err.println("Listener detected connection loss. Signalling main thread to reconnect...");
+                mainThreadToInterrupt.interrupt();
             }
         }
     }
