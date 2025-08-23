@@ -1,4 +1,3 @@
-// src/main/java/com/helphub/client/Client.java
 package com.helphub.client;
 
 import com.helphub.common.Message;
@@ -35,9 +34,8 @@ public class Client {
 
             System.out.println("Connected to the HelpHub server. Commands: /to <id> <msg>, /all <msg>");
             System.out.println("Press Ctrl+C to exit.");
-
-            // Start thread to listen for server messages
-            new Thread(new ServerListener(socket)).start();
+            // Start listener thread, now passing the writer to send ACKs
+            new Thread(new ServerListener(socket, writer)).start();
 
             // Shutdown hook for clean exit
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -79,9 +77,12 @@ public class Client {
 
     private static class ServerListener implements Runnable {
         private final Socket socket;
+        private final PrintWriter writer; // Writer to send ACKs back to the server
 
-        public ServerListener(Socket socket) { this.socket = socket; }
-
+        public ServerListener(Socket socket, PrintWriter writer) {
+            this.socket = socket;
+            this.writer = writer;
+        }
         @Override
         public void run() {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
@@ -89,8 +90,19 @@ public class Client {
                 while ((serverJson = reader.readLine()) != null) {
                     Message message = Message.fromJson(serverJson);
                     if (message != null) {
+                        // --- NEW: SEND ACK and DISPLAY MESSAGE ---
+
+                        // 1. Immediately send an ACK back to the server
+                        Message ack = Message.createAck(clientId, message.getId());
+                        writer.println(ack.toJson());
+
+                        // 2. Display the message to the user
                         String prefix = message.getType() == Message.MessageType.DIRECT ? "(Direct) " : "";
-                        System.out.println(prefix + "From " + message.getFrom() + ": " + message.getBody());
+                        // Check if the message is old (e.g., more than 60 seconds) to tag it as delayed
+                        boolean isDelayed = (System.currentTimeMillis() - message.getTimestamp()) > 60000;
+                        String delayedTag = isDelayed ? "(delayed) " : "";
+
+                        System.out.println(delayedTag + prefix + "From " + message.getFrom() + ": " + message.getBody());
                     } else {
                         System.out.println("Received unreadable message: " + serverJson);
                     }

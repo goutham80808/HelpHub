@@ -1,4 +1,3 @@
-// src/main/java/com/helphub/server/RelayServer.java
 package com.helphub.server;
 
 import com.helphub.common.Message;
@@ -11,6 +10,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -18,8 +18,12 @@ public class RelayServer {
     private static final int PORT = 5000;
     private static final String LOG_FILE_PATH = "logs/messages.log";
 
-    // A thread-safe Map to store client IDs and their corresponding writers.
     private final Map<String, PrintWriter> clientWriters = new ConcurrentHashMap<>();
+    private final Db database;
+
+    public RelayServer() {
+        this.database = new Db(); // Initialize the database
+    }
 
     public static void main(String[] args) {
         new RelayServer().startServer();
@@ -63,34 +67,30 @@ public class RelayServer {
         }
     }
 
-    private void routeMessage(String jsonMessage) {
-        logMessage(jsonMessage);
-        Message message = Message.fromJson(jsonMessage);
+    private void routeMessage(Message message) {
+        logMessage(message.toJson());
 
-        if (message == null) {
-            System.err.println("Received malformed message, could not route.");
-            return;
-        }
+        // Step 1: Always store the message in the database first for durability.
+        database.storeMessage(message);
 
+        // Step 2: Attempt immediate delivery to online clients.
         if (message.getType() == Message.MessageType.DIRECT) {
-            // Direct message: send only to the recipient
             PrintWriter writer = clientWriters.get(message.getTo());
             if (writer != null) {
-                writer.println(jsonMessage);
+                writer.println(message.toJson());
+                System.out.println("Delivered direct message to online client: " + message.getTo());
             } else {
-                System.out.println("Client '" + message.getTo() + "' not found. Message from '" + message.getFrom() + "' dropped.");
-                // Optional: send a 'user not found' status message back to the sender
+                System.out.println("Queued direct message for offline client: " + message.getTo());
             }
-        } else {
-            // Broadcast or Status message: send to everyone except the sender
+        } else if (message.getType() == Message.MessageType.BROADCAST) {
             for (Map.Entry<String, PrintWriter> entry : clientWriters.entrySet()) {
                 if (!entry.getKey().equals(message.getFrom())) {
-                    entry.getValue().println(jsonMessage);
+                    entry.getValue().println(message.toJson());
                 }
             }
+            System.out.println("Broadcast message sent to all online clients.");
         }
     }
-
 
     /**
      * Handles communication for a single connected client.
@@ -109,24 +109,35 @@ public class RelayServer {
             try (
                     BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
             ) {
-                // The first line from the client MUST be its client ID.
+                // First line is the client ID
                 this.clientId = reader.readLine();
                 if (this.clientId == null || this.clientId.trim().isEmpty() || clientWriters.containsKey(this.clientId)) {
                     System.out.println("Client failed to provide a valid or unique ID. Disconnecting.");
-                    return; // Close connection
+                    return;
                 }
 
                 this.writer = new PrintWriter(clientSocket.getOutputStream(), true);
                 clientWriters.put(this.clientId, this.writer);
-                System.out.println("Client '" + this.clientId + "' connected successfully.");
+                System.out.println("Client '" + this.clientId + "' connected. Checking for pending messages...");
 
-                // Process subsequent messages
+                // --- NEW: OFFLINE MESSAGE REPLAY ---
+                flushPendingMessages();
+
+                // Process subsequent messages from the client
                 String jsonMessage;
                 while ((jsonMessage = reader.readLine()) != null) {
-                    System.out.println("Routing message from '" + this.clientId + "'");
-                    routeMessage(jsonMessage);
-                }
+                    Message message = Message.fromJson(jsonMessage);
+                    if (message == null) continue;
 
+                    if (message.getType() == Message.MessageType.ACK) {
+                        // Client is acknowledging receipt of a message
+                        database.updateMessageStatus(message.getBody(), "DELIVERED");
+                        System.out.println("Received ACK for message " + message.getBody() + " from " + clientId);
+                    } else {
+                        // It's a regular message to be routed
+                        routeMessage(message);
+                    }
+                }
             } catch (IOException e) {
                 System.out.println("Client '" + this.clientId + "' disconnected.");
             } finally {
@@ -139,6 +150,15 @@ public class RelayServer {
                     clientSocket.close();
                 } catch (IOException e) {
                     // Ignore
+                }
+            }
+        }
+        private void flushPendingMessages() {
+            List<Message> pending = database.getPendingMessagesForClient(clientId);
+            if (!pending.isEmpty()) {
+                System.out.println("Sending " + pending.size() + " pending messages to " + clientId);
+                for (Message msg : pending) {
+                    writer.println(msg.toJson());
                 }
             }
         }

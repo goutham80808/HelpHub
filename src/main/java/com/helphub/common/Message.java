@@ -1,10 +1,10 @@
-// src/main/java/com/helphub/common/Message.java
 package com.helphub.common;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 /**
  * A Plain Old Java Object (POJO) representing a message in the HelpHub system.
  * Includes manual serialization/deserialization methods to/from a simple JSON format.
@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 public class Message {
 
     public enum MessageType {
-        DIRECT, BROADCAST, STATUS
+        DIRECT, BROADCAST, STATUS, ACK
     }
 
     private final String id;
@@ -102,6 +102,37 @@ public class Message {
         } catch (Exception e) {
             System.err.println("Failed to parse JSON message: " + json);
             return null; // Return null on any parsing error
+        }
+    }
+
+    /**
+     * Creates a simple ACK message.
+     * The body of the ACK contains the ID of the message being acknowledged.
+     * @param fromClientId The client sending the ACK.
+     * @param acknowledgedMessageId The ID of the message that was received.
+     * @return A new Message object of type ACK.
+     */
+    public static Message createAck(String fromClientId, String acknowledgedMessageId) {
+        return new Message(MessageType.ACK, fromClientId, null, acknowledgedMessageId);
+    }
+
+    /**
+     * Creates a Message object from a java.sql.ResultSet.
+     * @param rs The ResultSet from a database query.
+     * @return A new Message object, or null if an error occurs.
+     */
+    public static Message fromResultSet(ResultSet rs) {
+        try {
+            String id = rs.getString("id");
+            MessageType type = MessageType.valueOf(rs.getString("type"));
+            String from = rs.getString("from_client");
+            String to = rs.getString("to_client");
+            long timestamp = rs.getLong("timestamp");
+            String body = rs.getString("body");
+            return new Message(id, type, from, to, timestamp, body);
+        } catch (SQLException e) {
+            System.err.println("Error creating Message from ResultSet: " + e.getMessage());
+            return null;
         }
     }
 }
