@@ -1,4 +1,4 @@
-// src/main/java/com/helphub/server/RelayServer.java
+// FILE: src/main/java/com/helphub/server/RelayServer.java
 package com.helphub.server;
 
 import com.helphub.common.Config;
@@ -247,7 +247,6 @@ public class RelayServer {
                 return;
             }
             try {
-                // This is a simplified tail implementation for demonstration
                 List<String> allLines = new ArrayList<>(java.nio.file.Files.readAllLines(logFile.toPath()));
                 allLines.stream().skip(Math.max(0, allLines.size() - count)).forEach(System.out::println);
             } catch (IOException e) {

@@ -1,4 +1,4 @@
-// src/test/java/com/helphub/common/MessageTest.java
+// FILE: src/test/java/com/helphub/common/MessageTest.java
 package com.helphub.common;
 
 import org.junit.jupiter.api.DisplayName;

@@ -1,88 +1,138 @@
-# HelpHub
+# 🚨 HelpHub (Command-Line Edition)
 
-HelpHub is a disaster-resilient, offline-first communication system built in Java. It operates entirely on a local Wi-Fi hotspot or LAN without any dependency on the Internet. This enables survivors and rescue workers to send and receive messages during natural disasters or other emergency scenarios when conventional networks are down.
+**HelpHub** is a **disaster-resilient, offline-first communication system** built in Java.
+It runs entirely on a local Wi-Fi hotspot or LAN — **no Internet required** — enabling survivors and rescue workers to send and receive messages when conventional networks are down.
 
-## Core Features
+---
 
-*   **Offline-First Communication**: Operates on any local network (LAN/Hotspot) with no internet required.
-*   **Encrypted Transport**: All communication is secured with TLS, protecting messages from eavesdropping on the network.
-*   **Guaranteed Messaging**: Uses a store-and-forward SQLite database to queue messages for offline users, ensuring delivery upon their return.
-*   **Reliable Connections**: Features automatic client reconnect with exponential backoff and server-side cleanup of dead connections.
-*   **Priority System**: Supports `HIGH` priority messages (e.g., `/sos`) that are delivered before normal messages.
-*   **Admin Monitoring**: A built-in command-line dashboard for server administrators to monitor system status, online clients, and pending messages in real-time.
+##  Features
 
-## How to Build
+1. **Offline-First Communication**
+   Works over any local network (LAN/Hotspot) with **zero Internet dependency**.
+
+2. **End-to-End Security**
+   Secured with **TLS encryption**, preventing eavesdropping.
+
+3. **Guaranteed Messaging**
+   Embedded **SQLite store-and-forward queue** ensures delivery once recipients reconnect.
+
+4. **Reliable Connections**
+   Automatic client reconnect with **exponential backoff** and server-side cleanup of dead sessions.
+
+5. **Priority System**
+   High-priority alerts (e.g., `/sos`) are always delivered before normal messages.
+
+6. **Admin Console**
+   Built-in CLI for real-time monitoring: connected clients, message queues, and system logs.
+
+---
+
+## Build Instructions
 
 ### Prerequisites
-*   Java 17 (or newer)
-*   Apache Maven
 
-### Build Command
-Navigate to the project's root directory (where `pom.xml` is located) and run the following command:
+* Java **17+**
+* [Apache Maven](https://maven.apache.org/)
+
+### Build
+
 ```bash
 mvn clean package
 ```
-This will compile the code and create a single, executable "fat JAR" in the `target/` directory (e.g., `helphub-0.1.0.jar`) that contains all necessary dependencies.
 
-## One-Time Setup: Generating the Security Key
+This generates a self-contained executable JAR at:
 
-Before running the system for the first time, you must generate the self-signed certificate that enables TLS encryption.
+```
+target/helphub-0.1.0.jar
+```
 
-1.  **Ensure Bouncy Castle is in `pom.xml`**: Your `pom.xml` should include the `bcprov-jdk15on` dependency.
-2.  **Run the KeyUtil**: Execute the following Maven command from your project root to generate the key:
-    ```bash
-    mvn exec:java -Dexec.mainClass="com.helphub.security.KeyUtil"
-    ```
-3.  This creates a **`helphub.keystore`** file in your project directory. This file is essential for both the server and the clients.
-4.  Add `*.keystore` to your `.gitignore` file to avoid committing it to version control.
+---
 
-## How to Run
+##  TLS Security Setup (One-Time)
 
-### 1. Run the Server
-The server requires the keystore password to be set as an environment variable to decrypt its private key.
+Before first run, generate the self-signed certificate:
 
-*   **On Linux/macOS:**
-    ```bash
-    export KEYSTORE_PASSWORD="HelpHubPassword"
-    java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
-    ```
-*   **On Windows (Command Prompt):**
-    ```bash
-    set KEYSTORE_PASSWORD="HelpHubPassword"
-    java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
-    ```
-The server will start, load the keystore, and begin listening for secure client connections.
+**Linux/macOS or CMD**
 
-### 2. Run the Client
-1.  **Copy the Keystore**: Copy the `helphub.keystore` file from the server's project directory to the directory where you will run the client application. The client needs this file to trust the server's certificate.
-2.  **Run the Command**: Open a new terminal and run the following command, providing a unique ID for each client:
-    ```bash
-    java -cp target/helphub-0.1.0.jar com.helphub.client.Client --id alpha
-    ```
-    *(Replace `alpha` with a unique ID like `rescue-team-1`, `medic-base`, etc.)*
+```bash
+mvn exec:java -Dexec.mainClass="com.helphub.security.KeyUtil"
+```
 
-## How to Use
+**PowerShell**
 
-### Client Chat Commands
--   `/to <recipientId> <message>`: Sends a private, normal-priority message to a specific user.
--   `/all <message>`: Sends a public, normal-priority message to all other users.
--   `/sos <message>`: Sends a public, **HIGH**-priority message to all users. This is for emergencies and will be delivered before any queued normal-priority messages.
+```powershell
+mvn exec:java "-Dexec.mainClass=com.helphub.security.KeyUtil"
+```
 
-### Admin Console Commands (Server-Side)
-Type these commands directly into the terminal where the `RelayServer` is running.
+This creates a keystore file:
 
--   `stats`: Displays a summary of online clients and pending/total message counts.
--   `clients`: Lists all currently connected clients and their last activity time.
--   `pending <clientId>`: Shows the queue of undelivered messages for a specific client.
--   `tail <n>`: Displays the last `n` lines from the `logs/messages.log` file (defaults to 10).
--   `help`: Shows the list of available admin commands.
+```
+helphub.keystore
+```
 
-## Technical Details
+Both server and clients require this file.
 
-### Configuration
-Network timing (heartbeats, timeouts, reconnect delays) can be tuned in the `src/main/resources/config.properties` file.
+---
 
-### Database Schema
-The server uses an SQLite database located at `data/emergency.db`.
--   **`clients`**: Stores client IDs and their last-seen timestamp.
--   **`messages`**: Stores all message details, including sender, recipient, content, status (`PENDING`/`DELIVERED`), and `priority`.
+##  Running HelpHub
+
+### 1. Start the Server
+
+Find your machine’s local IP (e.g., `192.168.1.10`).
+Set the keystore password as an environment variable:
+
+**Linux/macOS**
+
+```bash
+export KEYSTORE_PASSWORD="HelpHubPassword"
+java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$env:KEYSTORE_PASSWORD="HelpHubPassword"
+java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
+```
+
+---
+
+### 2. Run a Client
+
+Copy these files from the server machine to each client to the same directory:
+
+* `target/helphub-0.1.0.jar`
+* `helphub.keystore`
+
+Start a client (replace `<server-ip>` with the server address):
+
+```bash
+java -cp helphub-0.1.0.jar com.helphub.client.Client --id alpha --server 192.168.1.10
+```
+
+---
+
+##  Usage Guide
+
+### Client Commands
+
+* `/to <recipientId> <message>` → Private message
+* `/all <message>` → Broadcast to all
+* `/sos <message>` → High-priority emergency alert
+
+### Admin Console (Server-Side)
+
+* `stats` → Show summary of online clients and message counts
+* `clients` → List connected clients
+* `pending <clientId>` → Show queued undelivered messages
+* `tail <n>` → Show last *n* log lines from `logs/messages.log`
+* `help` → Show all admin commands
+
+---
+
+##  Notes
+
+* Works best on a **local Wi-Fi hotspot** without Internet.
+* Designed for **emergency communication** when mobile networks are down.
+
+---

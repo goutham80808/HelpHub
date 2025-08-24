@@ -1,37 +1,48 @@
-// src/main/java/com/helphub/client/Client.java
+// FILE: src/main/java/com/helphub/client/Client.java
 package com.helphub.client;
 
 import com.helphub.common.Config;
-import com.helphub.common.Message;
-import com.helphub.common.Priority;
 
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
-import java.io.*;
-import java.net.Socket;
-import java.util.concurrent.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 public class Client {
-    private static String clientId;
-    private static volatile ConnectionManager connectionManager;
+    static String clientId;
+    static volatile ConnectionManager connectionManager;
 
     public static void main(String[] args) {
-        if (args.length > 0 && args[0].equals("--id")) {
-            clientId = args[1];
-        } else {
+        String serverAddress = "localhost"; // Default value
+
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--id":
+                    if (i + 1 < args.length) clientId = args[++i];
+                    break;
+                case "--server":
+                    if (i + 1 < args.length) serverAddress = args[++i];
+                    break;
+            }
+        }
+
+        if (clientId == null) {
             clientId = "node-" + String.format("%06x", ThreadLocalRandom.current().nextInt(0, 0xFFFFFF + 1));
             System.out.println("No --id specified. Using generated ID: " + clientId);
         }
         System.out.println("HelpHub Client '" + clientId + "' starting...");
+        System.out.println("Attempting to connect to server at: " + serverAddress);
 
         Thread userInputThread = new Thread(new UserInputHandler());
         userInputThread.setDaemon(true);
         userInputThread.start();
 
         long currentBackoff = Config.getInt("reconnect.backoff.initial", 1000);
+        final String finalServerAddress = serverAddress;
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                connectionManager = new ConnectionManager(clientId);
+                connectionManager = new ConnectionManager(clientId, finalServerAddress);
                 connectionManager.connectAndListen();
             } catch (Exception e) {
                 System.err.println("Connection cycle ended: " + e.getMessage());
@@ -69,95 +80,5 @@ public class Client {
                 }
             } catch (IOException e) { /* Console read failed */ }
         }
-    }
-}
-
-class ConnectionManager {
-    private static final String SERVER_ADDRESS = "10.92.65.42";
-    private static final int SERVER_PORT = 5000;
-    private final String clientId;
-    private Socket socket;
-    private PrintWriter writer;
-    private ScheduledExecutorService heartbeatExecutor;
-
-    public ConnectionManager(String clientId) {
-        this.clientId = clientId;
-    }
-
-    public void connectAndListen() throws IOException {
-        try {
-            System.setProperty("javax.net.ssl.trustStore", "helphub.keystore");
-            System.setProperty("javax.net.ssl.trustStorePassword", "HelpHubPassword");
-
-            SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
-            socket = (SSLSocket) sf.createSocket(SERVER_ADDRESS, SERVER_PORT);
-
-            ((SSLSocket) socket).startHandshake();
-
-            writer = new PrintWriter(socket.getOutputStream(), true);
-            System.out.println("Successfully connected to the HelpHub server.");
-            writer.println(clientId);
-            startHeartbeat();
-            listenForMessages();
-        } finally {
-            disconnect();
-        }
-    }
-
-    private void listenForMessages() throws IOException {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-            String serverJson;
-            while ((serverJson = reader.readLine()) != null) {
-                Message message = Message.fromJson(serverJson);
-                if (message != null) {
-                    writer.println(Message.createAck(clientId, message.getId()).toJson());
-                    displayMessage(message);
-                }
-            }
-        }
-    }
-
-    public void handleUserInput(String userInput) {
-        if (writer == null || writer.checkError()) {
-            System.out.println("Not connected. Please wait for reconnection.");
-            return;
-        }
-        Message message;
-        if (userInput.toLowerCase().startsWith("/sos ")) {
-            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput.substring(5), Priority.HIGH);
-        } else if (userInput.startsWith("/to ")) {
-            String[] parts = userInput.split(" ", 3);
-            if (parts.length == 3) {
-                message = new Message(Message.MessageType.DIRECT, clientId, parts[1], parts[2], Priority.NORMAL);
-            } else {
-                System.out.println("Invalid format. Use: /to <recipientId> <message>");
-                return;
-            }
-        } else {
-            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput, Priority.NORMAL);
-        }
-        writer.println(message.toJson());
-    }
-
-    private void displayMessage(Message message) {
-        String prefix = message.getType() == Message.MessageType.DIRECT ? "(Direct) " : "";
-        boolean isDelayed = (System.currentTimeMillis() - message.getTimestamp()) > 60000;
-        String delayedTag = isDelayed ? "(delayed) " : "";
-        System.out.println(delayedTag + prefix + "From " + message.getFrom() + ": " + message.getBody());
-    }
-
-    private void startHeartbeat() {
-        heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
-        int interval = Config.getInt("heartbeat.interval", 15000);
-        heartbeatExecutor.scheduleAtFixedRate(() -> {
-            if (writer != null && !writer.checkError()) writer.println(Message.createHeartbeat(clientId).toJson());
-        }, interval, interval, TimeUnit.MILLISECONDS);
-    }
-
-    private void disconnect() {
-        System.out.println("Closing connection resources...");
-        if (heartbeatExecutor != null) heartbeatExecutor.shutdownNow();
-        try { if (writer != null) writer.close(); } catch (Exception e) { /* ignore */ }
-        try { if (socket != null) socket.close(); } catch (IOException e) { /* ignore */ }
     }
 }

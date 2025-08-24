@@ -1,4 +1,4 @@
-// src/main/java/com/helphub/security/KeyUtil.java
+// FILE: src/main/java/com/helphub/security/KeyUtil.java
 package com.helphub.security;
 
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -17,7 +17,6 @@ public class KeyUtil {
 
     @SuppressWarnings("deprecation")
     public static void main(String[] args) throws Exception {
-        // Register Bouncy Castle as a security provider
         Security.addProvider(new BouncyCastleProvider());
 
         System.out.println("Generating a new self-signed keystore...");

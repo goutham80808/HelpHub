@@ -1,4 +1,4 @@
-// src/test/java/com/helphub/server/DbTest.java
+// FILE: src/test/java/com/helphub/server/DbTest.java
 package com.helphub.server;
 
 import com.helphub.common.Message;

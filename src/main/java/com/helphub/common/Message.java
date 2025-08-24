@@ -1,4 +1,4 @@
-// src/main/java/com/helphub/common/Message.java
+// FILE: src/main/java/com/helphub/common/Message.java
 package com.helphub.common;
 
 import java.sql.ResultSet;
