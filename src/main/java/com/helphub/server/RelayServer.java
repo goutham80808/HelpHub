@@ -3,6 +3,7 @@ package com.helphub.server;
 
 import com.helphub.common.Config;
 import com.helphub.common.Message;
+import com.helphub.common.Priority;
 
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
@@ -189,8 +190,10 @@ public class RelayServer {
             }
         }
     }
+
     /**
      * Handles a single dashboard connection, responding to data requests.
+     * NOW INCLUDES an authentication check.
      */
     private class AdminConnectionHandler implements Runnable {
         private final Socket dashboardSocket;
@@ -203,19 +206,56 @@ public class RelayServer {
                     BufferedReader reader = new BufferedReader(new InputStreamReader(dashboardSocket.getInputStream()));
                     PrintWriter writer = new PrintWriter(dashboardSocket.getOutputStream(), true)
             ) {
+                // --- NEW: SECURITY CHECK ---
+                String providedPassword = reader.readLine();
+                String expectedPassword = System.getenv("ADMIN_PASSWORD");
+
+                if (expectedPassword == null || expectedPassword.isEmpty() || !expectedPassword.equals(providedPassword)) {
+                    System.out.println("Dashboard connection failed: Invalid admin password.");
+                    writer.println("ERROR:AUTH_FAILED");
+                    return; // Close the connection
+                }
+                // --- END SECURITY CHECK ---
+
                 String commandLine = reader.readLine();
                 if (commandLine == null) return;
 
-                String[] parts = commandLine.split("\\s+");
+                String[] parts = commandLine.split("\\s+", 2); // Split into command and the rest
                 String command = parts[0];
 
-                if ("GET_DATA".equals(command)) {
-                    writer.println(buildStateAsJson());
-                } else if ("GET_PENDING".equals(command) && parts.length > 1) {
-                    writer.println(buildPendingMessagesAsJson(parts[1]));
+                switch (command) {
+                    case "GET_DATA":
+                        writer.println(buildStateAsJson());
+                        break;
+                    case "GET_PENDING":
+                        if (parts.length > 1) writer.println(buildPendingMessagesAsJson(parts[1]));
+                        break;
+                    case "ADMIN_BROADCAST":
+                        if (parts.length > 1) handleAdminBroadcast(parts[1]);
+                        break;
+                    case "ADMIN_KICK":
+                        if (parts.length > 1) handleAdminKick(parts[1]);
+                        break;
                 }
             } catch (IOException e) {
                 System.out.println("Dashboard disconnected.");
+            }
+        }
+
+        private void handleAdminBroadcast(String messageBody) {
+            System.out.println("[ADMIN] Broadcasting message: " + messageBody);
+            Message adminMessage = new Message(Message.MessageType.BROADCAST, "_admin_", null, messageBody, Priority.HIGH);
+            // Use the server's main routing logic to send and store the message
+            routeMessage(adminMessage);
+        }
+
+        private void handleAdminKick(String clientId) {
+            System.out.println("[ADMIN] Kicking client: " + clientId);
+            ClientHandler handler = clientHandlers.get(clientId);
+            if (handler != null) {
+                handler.disconnect(); // Gracefully disconnect the client
+            } else {
+                System.out.println(" -> Client '" + clientId + "' not found or already disconnected.");
             }
         }
 
@@ -236,7 +276,14 @@ public class RelayServer {
                         handler.getClientId(), handler.getLastHeartbeatTime()
                 ));
             });
+
             json.append(String.join(",", clientEntries));
+            json.append("],");
+            json.append("\"clientsWithPending\":[");
+            List<String> pendingClientIds = database.getClientsWithPendingMessages();
+            List<String> quotedIds = new ArrayList<>();
+            pendingClientIds.forEach(id -> quotedIds.add("\"" + id + "\""));
+            json.append(String.join(",", quotedIds));
             json.append("]");
             json.append("}");
             return json.toString();
@@ -259,6 +306,7 @@ public class RelayServer {
             return json.toString();
         }
     }
+
     private class AdminConsole implements Runnable {
         @Override
         public void run() {

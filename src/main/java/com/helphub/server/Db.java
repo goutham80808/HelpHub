@@ -129,4 +129,19 @@ public class Db {
         }
         return 0;
     }
+
+    public synchronized List<String> getClientsWithPendingMessages() {
+        List<String> clientIds = new ArrayList<>();
+        // This query finds all unique client IDs that are the recipient of a PENDING message.
+        String sql = "SELECT DISTINCT to_client FROM messages WHERE status = 'PENDING' AND to_client IS NOT NULL";
+        try (Statement stmt = this.connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                clientIds.add(rs.getString("to_client"));
+            }
+        } catch (SQLException e) {
+            System.err.println("Failed to get clients with pending messages: " + e.getMessage());
+        }
+        return clientIds;
+    }
 }
