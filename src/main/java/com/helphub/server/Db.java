@@ -32,7 +32,14 @@ public class Db {
         try (Statement stmt = this.connection.createStatement()) {
             String clientsTableSql = "CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);";
             stmt.execute(clientsTableSql);
-            String messagesTableSql = "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, from_client TEXT NOT NULL, to_client TEXT, type TEXT NOT NULL, timestamp INTEGER NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL);";
+            String messagesTableSql = "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, " +
+                    "from_client TEXT NOT NULL," +
+                    " to_client TEXT, " +
+                    "type TEXT NOT NULL," +
+                    " timestamp INTEGER NOT NULL," +
+                    " body TEXT NOT NULL," +
+                    " priority INTEGER NOT NULL DEFAULT 1," +
+                    " status TEXT NOT NULL);";
             stmt.execute(messagesTableSql);
             System.out.println("Database tables initialized successfully.");
         } catch (SQLException e) {
@@ -42,7 +49,7 @@ public class Db {
     }
 
     public synchronized void storeMessage(Message message) {
-        String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, status) VALUES(?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, priority, status) VALUES(?,?,?,?,?,?,?,?)";
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, message.getId());
             pstmt.setString(2, message.getFrom());
@@ -50,7 +57,8 @@ public class Db {
             pstmt.setString(4, message.getType().name());
             pstmt.setLong(5, message.getTimestamp());
             pstmt.setString(6, message.getBody());
-            pstmt.setString(7, "PENDING");
+            pstmt.setInt(7, message.getPriority().level);
+            pstmt.setString(8, "PENDING");
             pstmt.executeUpdate();
         } catch (SQLException e) {
             System.err.println("Failed to store message: " + e.getMessage());
@@ -70,7 +78,9 @@ public class Db {
 
     public synchronized List<Message> getPendingMessagesForClient(String clientId) {
         List<Message> pendingMessages = new ArrayList<>();
-        String sql = "SELECT * FROM messages WHERE (to_client = ? AND status = 'PENDING') OR (type = 'BROADCAST' AND status = 'PENDING' AND from_client != ?)";
+        String sql = "SELECT * FROM messages WHERE (to_client = ? AND status = 'PENDING') OR " +
+                "(type = 'BROADCAST' AND status = 'PENDING' AND from_client != ?) " +
+                "ORDER BY priority DESC, timestamp ASC";
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, clientId);
             pstmt.setString(2, clientId);

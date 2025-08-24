@@ -56,3 +56,6 @@ out/
 
 ### Database
 data
+
+# Security files
+*.keystore

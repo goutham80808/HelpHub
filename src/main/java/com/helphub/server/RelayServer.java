@@ -17,6 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
+import javax.net.ssl.SSLSocket;
 
 public class RelayServer {
     private static final int PORT = 5000;
@@ -35,17 +38,28 @@ public class RelayServer {
 
     public void startServer() {
         System.out.println("HelpHub Relay Server starting on port " + PORT + "...");
+        String keyStorePassword = System.getenv("KEYSTORE_PASSWORD");
+        if (keyStorePassword == null) {
+            System.err.println("FATAL: KEYSTORE_PASSWORD environment variable not set.");
+            System.exit(1);
+        }
+        System.setProperty("javax.net.ssl.keyStore", "helphub.keystore");
+        System.setProperty("javax.net.ssl.keyStorePassword", keyStorePassword);
         startConnectionCleanupTask();
         Thread adminConsoleThread = new Thread(new AdminConsole());
         adminConsoleThread.setDaemon(true); // Allows server to shut down even if this thread is blocked
         adminConsoleThread.start();
         System.out.println("Admin console started. Type 'help' for a list of commands.");
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            System.out.println("Server is listening for client connections.");
-            while (true) {
-                Socket clientSocket = serverSocket.accept();
-                ClientHandler handler = new ClientHandler(clientSocket);
-                new Thread(handler).start();
+        try{
+            SSLServerSocketFactory ssf = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
+            try (SSLServerSocket serverSocket = (SSLServerSocket) ssf.createServerSocket(PORT)) {
+                System.out.println("Server is listening for secure client connections.");
+                while (true) {
+                    // Accept will return an SSLSocket
+                    SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
+                    ClientHandler handler = new ClientHandler(clientSocket);
+                    new Thread(handler).start();
+                }
             }
         } catch (IOException e) {
             System.err.println("Error starting the server: " + e.getMessage());

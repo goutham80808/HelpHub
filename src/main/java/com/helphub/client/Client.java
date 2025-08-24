@@ -3,6 +3,10 @@ package com.helphub.client;
 
 import com.helphub.common.Config;
 import com.helphub.common.Message;
+import com.helphub.common.Priority;
+
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 
 import java.io.*;
 import java.net.Socket;
@@ -89,7 +93,11 @@ class ConnectionManager {
 
     public void connectAndListen() throws IOException {
         try {
-            socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
+            System.setProperty("javax.net.ssl.trustStore", "helphub.keystore");
+            System.setProperty("javax.net.ssl.trustStorePassword", "HelpHubPassword");
+
+            SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            socket = (SSLSocket) sf.createSocket(SERVER_ADDRESS, SERVER_PORT);
             writer = new PrintWriter(socket.getOutputStream(), true);
             System.out.println("Successfully connected to the HelpHub server.");
             writer.println(clientId);
@@ -121,19 +129,19 @@ class ConnectionManager {
             return;
         }
         Message message;
-        if (userInput.startsWith("/to ")) {
+        if (userInput.toLowerCase().startsWith("/sos ")) {
+            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput.substring(5), Priority.HIGH);
+            writer.println(message.toJson());
+        }else if (userInput.startsWith("/to ")) {
             String[] parts = userInput.split(" ", 3);
             if (parts.length == 3) {
-                message = new Message(Message.MessageType.DIRECT, clientId, parts[1], parts[2]);
+                message = new Message(Message.MessageType.DIRECT, clientId, parts[1], parts[2], Priority.NORMAL);
                 writer.println(message.toJson());
             } else {
                 System.out.println("Invalid format. Use: /to <recipientId> <message>");
             }
-        } else if (userInput.startsWith("/all ")) {
-            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput.substring(5));
-            writer.println(message.toJson());
         } else {
-            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput);
+            message = new Message(Message.MessageType.BROADCAST, clientId, null, userInput, Priority.NORMAL);
             writer.println(message.toJson());
         }
     }

@@ -16,25 +16,29 @@ public class Message {
     private final String to;
     private final long timestamp;
     private final String body;
+    private final Priority priority;
 
-    public Message(MessageType type, String from, String to, String body) {
+    public Message(MessageType type, String from, String to, String body, Priority priority) {
         this.id = UUID.randomUUID().toString();
         this.type = type;
         this.from = from;
         this.to = to;
         this.timestamp = System.currentTimeMillis();
         this.body = body;
+        this.priority = priority;
     }
 
-    private Message(String id, MessageType type, String from, String to, long timestamp, String body) {
+    private Message(String id, MessageType type, String from, String to, long timestamp, String body, Priority priority) {
         this.id = id;
         this.type = type;
         this.from = from;
         this.to = to;
         this.timestamp = timestamp;
         this.body = body;
+        this.priority = priority;
     }
 
+    public Priority getPriority() { return priority; }
     public String getId() { return id; }
     public MessageType getType() { return type; }
     public String getFrom() { return from; }
@@ -45,8 +49,8 @@ public class Message {
     public String toJson() {
         String safeBody = body.replace("\\", "\\\\").replace("\"", "\\\"");
         return String.format(
-                "{\"id\":\"%s\",\"type\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"timestamp\":%d,\"body\":\"%s\"}",
-                id, type, from, (to == null ? "null" : to), timestamp, safeBody
+                "{\"id\":\"%s\",\"type\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"timestamp\":%d,\"body\":\"%s\",\"priority\":%d}",
+                id, type, from, (to == null ? "null" : to), timestamp, safeBody, priority.level
         );
     }
 
@@ -58,7 +62,7 @@ public class Message {
             String to = extractValue(json, "to");
             String timestampStr = extractValue(json, "timestamp");
             String body = extractValue(json, "body");
-
+            String priorityStr = extractValue(json, "priority");
             if (id == null || typeStr == null || from == null || body == null || timestampStr == null) {
                 return null;
             }
@@ -68,7 +72,9 @@ public class Message {
             if (to != null && to.equals("null")) {
                 to = null;
             }
-            return new Message(id, type, from, to, timestamp, body);
+            // Default to NORMAL if priority is not present for backward compatibility
+            Priority priority = (priorityStr != null) ? Priority.fromLevel(Integer.parseInt(priorityStr)) : Priority.NORMAL;
+            return new Message(id, type, from, to, timestamp, body, priority);
         } catch (Exception e) {
             System.err.println("Failed to parse JSON message: " + json + " | Error: " + e.getMessage());
             return null;
@@ -100,11 +106,13 @@ public class Message {
     }
 
     public static Message createAck(String fromClientId, String acknowledgedMessageId) {
-        return new Message(MessageType.ACK, fromClientId, null, acknowledgedMessageId);
+        // Provide Priority.NORMAL as the fifth argument
+        return new Message(MessageType.ACK, fromClientId, null, acknowledgedMessageId, Priority.NORMAL);
     }
 
     public static Message createHeartbeat(String fromClientId) {
-        return new Message(MessageType.HEARTBEAT, fromClientId, null, "ping");
+        // Provide Priority.NORMAL as the fifth argument
+        return new Message(MessageType.HEARTBEAT, fromClientId, null, "ping", Priority.NORMAL);
     }
 
     public static Message fromResultSet(ResultSet rs) {
@@ -115,7 +123,9 @@ public class Message {
             String to = rs.getString("to_client");
             long timestamp = rs.getLong("timestamp");
             String body = rs.getString("body");
-            return new Message(id, type, from, to, timestamp, body);
+            int priorityLevel = rs.getInt("priority");
+            Priority priority = Priority.fromLevel(priorityLevel);
+            return new Message(id, type, from, to, timestamp, body, priority);
         } catch (SQLException e) {
             System.err.println("Error creating Message from ResultSet: " + e.getMessage());
             return null;
