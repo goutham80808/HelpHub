@@ -8,6 +8,7 @@ import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSocket;
 import java.io.*;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -22,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 
 public class RelayServer {
     private static final int PORT = 5000;
+    private static final int ADMIN_PORT = 5001; // NEW ADMIN PORT
+
     private static final String LOG_FILE_PATH = "logs/messages.log";
     private final Map<String, ClientHandler> clientHandlers = new ConcurrentHashMap<>();
     private final Db database;
@@ -46,7 +49,7 @@ public class RelayServer {
         adminConsoleThread.setDaemon(true);
         adminConsoleThread.start();
         System.out.println("Admin console started. Type 'help' for a list of commands.");
-
+        startAdminDataListener();
         try {
             SSLServerSocketFactory ssf = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
             try (SSLServerSocket serverSocket = (SSLServerSocket) ssf.createServerSocket(PORT)) {
@@ -61,6 +64,20 @@ public class RelayServer {
             System.err.println("Error in server socket listener: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    private void startAdminDataListener() {
+        new Thread(() -> {
+            try (ServerSocket adminSocket = new ServerSocket(ADMIN_PORT)) {
+                System.out.println("Dashboard listener started on port " + ADMIN_PORT);
+                while (true) {
+                    Socket dashboardConnection = adminSocket.accept();
+                    new Thread(new AdminConnectionHandler(dashboardConnection)).start();
+                }
+            } catch (IOException e) {
+                System.err.println("FATAL: Could not start dashboard listener: " + e.getMessage());
+            }
+        }).start();
     }
 
     private void startConnectionCleanupTask() {
@@ -172,7 +189,76 @@ public class RelayServer {
             }
         }
     }
+    /**
+     * Handles a single dashboard connection, responding to data requests.
+     */
+    private class AdminConnectionHandler implements Runnable {
+        private final Socket dashboardSocket;
 
+        public AdminConnectionHandler(Socket socket) { this.dashboardSocket = socket; }
+
+        @Override
+        public void run() {
+            try (
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(dashboardSocket.getInputStream()));
+                    PrintWriter writer = new PrintWriter(dashboardSocket.getOutputStream(), true)
+            ) {
+                String commandLine = reader.readLine();
+                if (commandLine == null) return;
+
+                String[] parts = commandLine.split("\\s+");
+                String command = parts[0];
+
+                if ("GET_DATA".equals(command)) {
+                    writer.println(buildStateAsJson());
+                } else if ("GET_PENDING".equals(command) && parts.length > 1) {
+                    writer.println(buildPendingMessagesAsJson(parts[1]));
+                }
+            } catch (IOException e) {
+                System.out.println("Dashboard disconnected.");
+            }
+        }
+
+        private String buildStateAsJson() {
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            // Stats
+            json.append("\"stats\":{");
+            json.append("\"onlineClients\":").append(clientHandlers.size()).append(",");
+            json.append("\"pendingMessages\":").append(database.getPendingMessageCount());
+            json.append("},");
+            // Clients
+            json.append("\"clients\":[");
+            List<String> clientEntries = new ArrayList<>();
+            clientHandlers.values().forEach(handler -> {
+                clientEntries.add(String.format(
+                        "{\"clientId\":\"%s\",\"lastSeen\":%d}",
+                        handler.getClientId(), handler.getLastHeartbeatTime()
+                ));
+            });
+            json.append(String.join(",", clientEntries));
+            json.append("]");
+            json.append("}");
+            return json.toString();
+        }
+
+        private String buildPendingMessagesAsJson(String clientId) {
+            List<Message> pending = database.getPendingMessagesForClient(clientId);
+            StringBuilder json = new StringBuilder();
+            json.append("[");
+            List<String> msgEntries = new ArrayList<>();
+            pending.forEach(msg -> {
+                String safeBody = msg.getBody().replace("\"", "\\\"");
+                msgEntries.add(String.format(
+                        "{\"from\":\"%s\",\"priority\":\"%s\",\"body\":\"%s\"}",
+                        msg.getFrom(), msg.getPriority(), safeBody
+                ));
+            });
+            json.append(String.join(",", msgEntries));
+            json.append("]");
+            return json.toString();
+        }
+    }
     private class AdminConsole implements Runnable {
         @Override
         public void run() {
