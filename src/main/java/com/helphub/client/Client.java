@@ -67,7 +67,7 @@ public class Client {
                         System.out.println("Not connected. Message not sent.");
                     }
                 }
-            } catch (IOException e) { /* ignore */ }
+            } catch (IOException e) { /* Console read failed */ }
         }
     }
 }
@@ -92,7 +92,6 @@ class ConnectionManager {
             SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
             socket = (SSLSocket) sf.createSocket(SERVER_ADDRESS, SERVER_PORT);
 
-            // --- FIX: Force TLS handshake to complete before sending data ---
             ((SSLSocket) socket).startHandshake();
 
             writer = new PrintWriter(socket.getOutputStream(), true);
@@ -151,7 +150,7 @@ class ConnectionManager {
         heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
         int interval = Config.getInt("heartbeat.interval", 15000);
         heartbeatExecutor.scheduleAtFixedRate(() -> {
-            if (!writer.checkError()) writer.println(Message.createHeartbeat(clientId).toJson());
+            if (writer != null && !writer.checkError()) writer.println(Message.createHeartbeat(clientId).toJson());
         }, interval, interval, TimeUnit.MILLISECONDS);
     }
 

@@ -1,3 +1,4 @@
+// src/main/java/com/helphub/common/Message.java
 package com.helphub.common;
 
 import java.sql.ResultSet;
@@ -38,13 +39,13 @@ public class Message {
         this.priority = priority;
     }
 
-    public Priority getPriority() { return priority; }
     public String getId() { return id; }
     public MessageType getType() { return type; }
     public String getFrom() { return from; }
     public String getTo() { return to; }
     public long getTimestamp() { return timestamp; }
     public String getBody() { return body; }
+    public Priority getPriority() { return priority; }
 
     public String toJson() {
         String safeBody = body.replace("\\", "\\\\").replace("\"", "\\\"");
@@ -63,17 +64,14 @@ public class Message {
             String timestampStr = extractValue(json, "timestamp");
             String body = extractValue(json, "body");
             String priorityStr = extractValue(json, "priority");
-            if (id == null || typeStr == null || from == null || body == null || timestampStr == null) {
-                return null;
-            }
+
+            if (id == null || typeStr == null || from == null || body == null || timestampStr == null) return null;
 
             MessageType type = MessageType.valueOf(typeStr);
             long timestamp = Long.parseLong(timestampStr);
-            if (to != null && to.equals("null")) {
-                to = null;
-            }
-            // Default to NORMAL if priority is not present for backward compatibility
+            if (to != null && to.equals("null")) to = null;
             Priority priority = (priorityStr != null) ? Priority.fromLevel(Integer.parseInt(priorityStr)) : Priority.NORMAL;
+
             return new Message(id, type, from, to, timestamp, body, priority);
         } catch (Exception e) {
             System.err.println("Failed to parse JSON message: " + json + " | Error: " + e.getMessage());
@@ -106,29 +104,22 @@ public class Message {
     }
 
     public static Message createAck(String fromClientId, String acknowledgedMessageId) {
-        // Provide Priority.NORMAL as the fifth argument
         return new Message(MessageType.ACK, fromClientId, null, acknowledgedMessageId, Priority.NORMAL);
     }
 
     public static Message createHeartbeat(String fromClientId) {
-        // Provide Priority.NORMAL as the fifth argument
         return new Message(MessageType.HEARTBEAT, fromClientId, null, "ping", Priority.NORMAL);
     }
 
-    public static Message fromResultSet(ResultSet rs) {
-        try {
-            String id = rs.getString("id");
-            MessageType type = MessageType.valueOf(rs.getString("type"));
-            String from = rs.getString("from_client");
-            String to = rs.getString("to_client");
-            long timestamp = rs.getLong("timestamp");
-            String body = rs.getString("body");
-            int priorityLevel = rs.getInt("priority");
-            Priority priority = Priority.fromLevel(priorityLevel);
-            return new Message(id, type, from, to, timestamp, body, priority);
-        } catch (SQLException e) {
-            System.err.println("Error creating Message from ResultSet: " + e.getMessage());
-            return null;
-        }
+    public static Message fromResultSet(ResultSet rs) throws SQLException {
+        String id = rs.getString("id");
+        MessageType type = MessageType.valueOf(rs.getString("type"));
+        String from = rs.getString("from_client");
+        String to = rs.getString("to_client");
+        long timestamp = rs.getLong("timestamp");
+        String body = rs.getString("body");
+        int priorityLevel = rs.getInt("priority");
+        Priority priority = Priority.fromLevel(priorityLevel);
+        return new Message(id, type, from, to, timestamp, body, priority);
     }
 }

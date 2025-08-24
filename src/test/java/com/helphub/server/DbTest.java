@@ -1,3 +1,4 @@
+// src/test/java/com/helphub/server/DbTest.java
 package com.helphub.server;
 
 import com.helphub.common.Message;
@@ -14,53 +15,47 @@ class DbTest {
     @BeforeEach
     @DisplayName("Set up a fresh in-memory database for each test")
     void setUp() {
-        // Using an in-memory database ensures tests are fast and isolated
         database = new Db("jdbc:sqlite::memory:");
     }
 
     @Test
     @DisplayName("Should store and retrieve a pending direct message")
     void testStoreAndRetrievePendingMessage() {
-        // FIX: Added Priority.NORMAL to the constructor call
         Message msg = new Message(Message.MessageType.DIRECT, "alpha", "bravo", "Test", Priority.NORMAL);
         database.storeMessage(msg);
         List<Message> pending = database.getPendingMessagesForClient("bravo");
 
-        assertEquals(1, pending.size(), "Bravo should have one pending message");
+        assertEquals(1, pending.size());
         assertEquals(msg.getId(), pending.get(0).getId());
     }
 
     @Test
     @DisplayName("Should update message status from PENDING to DELIVERED")
     void testUpdateMessageStatus() {
-        // FIX: Added Priority.NORMAL to the constructor call
         Message msg = new Message(Message.MessageType.DIRECT, "alpha", "bravo", "Test", Priority.NORMAL);
         database.storeMessage(msg);
         database.updateMessageStatus(msg.getId(), "DELIVERED");
 
         List<Message> pending = database.getPendingMessagesForClient("bravo");
-        assertTrue(pending.isEmpty(), "There should be no more PENDING messages after status update");
+        assertTrue(pending.isEmpty());
     }
 
     @Test
     @DisplayName("Should retrieve pending messages ordered by priority (HIGH > NORMAL > LOW)")
     void testPriorityOrderOfPendingMessages() {
-        // 1. Create and store messages for 'charlie' out of order
-        Message normalMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "Normal priority message", Priority.NORMAL);
-        Message highMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "High priority message", Priority.HIGH);
-        Message lowMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "Low priority message", Priority.LOW);
+        Message normalMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "Normal", Priority.NORMAL);
+        Message highMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "High", Priority.HIGH);
+        Message lowMsg = new Message(Message.MessageType.DIRECT, "alpha", "charlie", "Low", Priority.LOW);
 
         database.storeMessage(normalMsg);
         database.storeMessage(highMsg);
         database.storeMessage(lowMsg);
 
-        // 2. Retrieve the pending messages for 'charlie'
         List<Message> pending = database.getPendingMessagesForClient("charlie");
 
-        // 3. Assert that the messages are returned in the correct priority order
-        assertEquals(3, pending.size(), "There should be three pending messages");
-        assertEquals(Priority.HIGH, pending.get(0).getPriority(), "The first message should be HIGH priority");
-        assertEquals(Priority.NORMAL, pending.get(1).getPriority(), "The second message should be NORMAL priority");
-        assertEquals(Priority.LOW, pending.get(2).getPriority(), "The third message should be LOW priority");
+        assertEquals(3, pending.size());
+        assertEquals(Priority.HIGH, pending.get(0).getPriority());
+        assertEquals(Priority.NORMAL, pending.get(1).getPriority());
+        assertEquals(Priority.LOW, pending.get(2).getPriority());
     }
 }

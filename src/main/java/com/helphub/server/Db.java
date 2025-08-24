@@ -9,7 +9,6 @@ import java.util.List;
 
 public class Db {
     private static final String DEFAULT_DB_PATH = "data/emergency.db";
-    private final String dbUrl;
     private final Connection connection;
 
     public Db() {
@@ -18,9 +17,8 @@ public class Db {
     }
 
     public Db(String dbUrl) {
-        this.dbUrl = dbUrl;
         try {
-            this.connection = DriverManager.getConnection(this.dbUrl);
+            this.connection = DriverManager.getConnection(dbUrl);
             initializeDatabase();
         } catch (SQLException e) {
             System.err.println("FATAL: Failed to establish database connection: " + e.getMessage());
@@ -32,14 +30,16 @@ public class Db {
         try (Statement stmt = this.connection.createStatement()) {
             String clientsTableSql = "CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);";
             stmt.execute(clientsTableSql);
-            String messagesTableSql = "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, " +
-                    "from_client TEXT NOT NULL," +
-                    " to_client TEXT, " +
-                    "type TEXT NOT NULL," +
+            String messagesTableSql = "CREATE TABLE IF NOT EXISTS messages (" +
+                    " id TEXT PRIMARY KEY," +
+                    " from_client TEXT NOT NULL," +
+                    " to_client TEXT," +
+                    " type TEXT NOT NULL," +
                     " timestamp INTEGER NOT NULL," +
                     " body TEXT NOT NULL," +
                     " priority INTEGER NOT NULL DEFAULT 1," +
-                    " status TEXT NOT NULL);";
+                    " status TEXT NOT NULL" +
+                    ");";
             stmt.execute(messagesTableSql);
             System.out.println("Database tables initialized successfully.");
         } catch (SQLException e) {
@@ -86,10 +86,7 @@ public class Db {
             pstmt.setString(2, clientId);
             ResultSet rs = pstmt.executeQuery();
             while (rs.next()) {
-                Message message = Message.fromResultSet(rs);
-                if (message != null) {
-                    pendingMessages.add(message);
-                }
+                pendingMessages.add(Message.fromResultSet(rs));
             }
         } catch (SQLException e) {
             System.err.println("Failed to retrieve pending messages: " + e.getMessage());
@@ -110,11 +107,8 @@ public class Db {
 
     public synchronized long getPendingMessageCount() {
         String sql = "SELECT COUNT(*) FROM messages WHERE status = 'PENDING'";
-        try (Statement stmt = this.connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            if (rs.next()) {
-                return rs.getLong(1);
-            }
+        try (Statement stmt = this.connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) return rs.getLong(1);
         } catch (SQLException e) {
             System.err.println("Failed to get pending message count: " + e.getMessage());
         }
@@ -123,11 +117,8 @@ public class Db {
 
     public synchronized long getTotalMessageCount() {
         String sql = "SELECT COUNT(*) FROM messages";
-        try (Statement stmt = this.connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            if (rs.next()) {
-                return rs.getLong(1);
-            }
+        try (Statement stmt = this.connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) return rs.getLong(1);
         } catch (SQLException e) {
             System.err.println("Failed to get total message count: " + e.getMessage());
         }

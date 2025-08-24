@@ -1,9 +1,6 @@
+// src/main/java/com/helphub/common/Priority.java
 package com.helphub.common;
 
-/**
- * Defines the priority levels for messages.
- * Stored in the database as integers for efficient sorting.
- */
 public enum Priority {
     LOW(0),
     NORMAL(1),
