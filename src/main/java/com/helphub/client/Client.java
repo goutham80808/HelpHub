@@ -73,7 +73,7 @@ public class Client {
 }
 
 class ConnectionManager {
-    private static final String SERVER_ADDRESS = "localhost";
+    private static final String SERVER_ADDRESS = "10.92.65.42";
     private static final int SERVER_PORT = 5000;
     private final String clientId;
     private Socket socket;

@@ -12,16 +12,25 @@ public class Db {
     private final Connection connection;
 
     public Db() {
-        this("jdbc:sqlite:" + DEFAULT_DB_PATH);
+        // --- FIX: Create the directory FIRST ---
         new File("data").mkdirs();
+        // --- THEN, call the constructor that connects ---
+        this.connection = connect("jdbc:sqlite:" + DEFAULT_DB_PATH);
+        initializeDatabase();
     }
 
     public Db(String dbUrl) {
+        // This constructor is now primarily for testing with in-memory DB
+        this.connection = connect(dbUrl);
+        initializeDatabase();
+    }
+
+    // Helper method to establish connection, now contains the try-catch block
+    private Connection connect(String dbUrl) {
         try {
-            this.connection = DriverManager.getConnection(dbUrl);
-            initializeDatabase();
+            return DriverManager.getConnection(dbUrl);
         } catch (SQLException e) {
-            System.err.println("FATAL: Failed to establish database connection: " + e.getMessage());
+            System.err.println("FATAL: Failed to establish database connection to " + dbUrl + ": " + e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -47,6 +56,9 @@ public class Db {
             e.printStackTrace();
         }
     }
+
+    // ALL OTHER METHODS (storeMessage, updateMessageStatus, etc.) ARE CORRECT AND DO NOT NEED TO CHANGE
+    // They correctly use the 'this.connection' field which is now guaranteed to be valid.
 
     public synchronized void storeMessage(Message message) {
         String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, priority, status) VALUES(?,?,?,?,?,?,?,?)";
