@@ -1,7 +1,7 @@
 # 🚨 HelpHub (Command-Line Edition)
 
 **HelpHub** is a **disaster-resilient, offline-first communication system** built in Java.
-It runs entirely on a local Wi-Fi hotspot or LAN — **no Internet required** — enabling survivors and rescue workers to send and receive messages when conventional networks are down.
+It runs entirely on a local Wi-Fi hotspot or LAN  **no Internet required**  enabling survivors and rescue workers to send and receive messages when conventional networks are down.
 
 ---
 
