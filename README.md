@@ -203,7 +203,7 @@ java -cp helphub-0.1.0.jar com.helphub.client.Client --id alpha --server 192.168
 export ADMIN_PASSWORD="YourSecretAdminPassword"
 
 # Start dashboard
-mvn javafx:run -Dadmin.password="YourSecretAdminPassword"
+mvn javafx:run "-Dadmin.password=YourSecretAdminPassword"
 ```
 
 ---
