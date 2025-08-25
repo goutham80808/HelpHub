@@ -1,0 +1,114 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #f4f4f8;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+#chat-container {
+    width: 95%;
+    max-width: 800px;
+    height: 95vh;
+    background-color: white;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+}
+
+#header {
+    padding: 15px;
+    border-bottom: 1px solid #e0e0e0;
+    background-color: #f7f7f7;
+    border-radius: 8px 8px 0 0;
+}
+
+#header h1 {
+    margin: 0;
+    font-size: 1.2em;
+}
+
+#status {
+    font-size: 0.8em;
+    color: #888;
+}
+
+#messages {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 15px;
+    display: flex;
+    flex-direction: column-reverse; /* New messages appear at the bottom */
+}
+
+.message {
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border-radius: 18px;
+    max-width: 70%;
+    line-height: 1.4;
+}
+
+.message .sender {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-bottom: 4px;
+    color: #333;
+}
+
+.message.local {
+    background-color: #007bff;
+    color: white;
+    align-self: flex-end;
+}
+
+.message.remote {
+    background-color: #e9e9eb;
+    color: black;
+    align-self: flex-start;
+}
+
+.message.direct {
+    border: 1px dashed #a0a0a0;
+}
+
+.message.sos {
+    background-color: #d73a49; /* Red for high alert */
+    color: white;
+    font-weight: bold;
+}
+
+.message.sos .sender {
+    color: white; /* Make sender text readable on red background */
+}
+
+#input-area {
+    display: flex;
+    padding: 15px;
+    border-top: 1px solid #e0e0e0;
+}
+
+#message-input {
+    flex-grow: 1;
+    border: 1px solid #ccc;
+    padding: 10px;
+    border-radius: 20px;
+    margin-right: 10px;
+}
+
+#send-button {
+    padding: 10px 20px;
+    border: none;
+    background-color: #007bff;
+    color: white;
+    border-radius: 20px;
+    cursor: pointer;
+}
+
+#send-button:disabled {
+    background-color: #a0a0a0;
+    cursor: not-allowed;
+}

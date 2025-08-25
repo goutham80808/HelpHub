@@ -1,10 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HelpHub Chat</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-$END$
+<div id="chat-container">
+    <div id="header">
+        <h1>HelpHub Web Chat</h1>
+        <div id="status">Connecting...</div>
+    </div>
+    <div id="messages">
+        <!-- Messages will be added here by JavaScript -->
+    </div>
+    <div id="input-area">
+        <input type="text" id="message-input" placeholder="Type your message..." disabled>
+        <button id="send-button" disabled>Send</button>
+    </div>
+</div>
+
+<!-- The JavaScript that powers the chat -->
+<script src="chat.js"></script>
 </body>
 </html>

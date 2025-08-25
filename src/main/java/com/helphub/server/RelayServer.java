@@ -1,123 +1,319 @@
-// FILE: src/main/java/com/helphub/server/RelayServer.java
 package com.helphub.server;
 
 import com.helphub.common.Config;
 import com.helphub.common.Message;
 import com.helphub.common.Priority;
+import com.helphub.server.web.WebSocketHandler;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.handler.HandlerList;
+import org.eclipse.jetty.server.handler.ResourceHandler;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.server.config.JettyWebSocketServletContainerInitializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import javax.jmdns.JmDNS;
+import javax.jmdns.ServiceInfo;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSocket;
 import java.io.*;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * The main application class for the HelpHub Relay Server.
+ * <p>
+ * This server is the central hub of the HelpHub system. It is responsible for:
+ * <ul>
+ *   <li>Listening for secure connections from command-line (TCP) clients.</li>
+ *   <li>Hosting a web server and listening for connections from web-based (WebSocket) clients.</li>
+ *   <li>Listening for connections from the admin dashboard for monitoring and control.</li>
+ *   <li>Routing messages between all connected clients.</li>
+ *   <li>Persisting messages to a database for offline delivery.</li>
+ *   <li>Broadcasting its presence on the network via mDNS for easy discovery.</li>
+ * </ul>
+ */
 public class RelayServer {
-    private static final int PORT = 5000;
-    private static final int ADMIN_PORT = 5001; // NEW ADMIN PORT
+    private static final Logger logger = LoggerFactory.getLogger(RelayServer.class);
 
+    // --- Network Ports ---
+    private static final int PORT = 5000;
+    private static final int ADMIN_PORT = 5001;
+    private static final int WEB_PORT = 8080;
     private static final String LOG_FILE_PATH = "logs/messages.log";
+
+    // --- Server Components ---
     private final Map<String, ClientHandler> clientHandlers = new ConcurrentHashMap<>();
     private final Db database;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private Server webServer;
+    private JmDNS jmdns;
 
-    public RelayServer() { this.database = new Db(); }
-    public static void main(String[] args) { new RelayServer().startServer(); }
+    public RelayServer() {
+        this.database = new Db();
+    }
 
+    public static void main(String[] args) {
+        new RelayServer().startServer();
+    }
+
+    /**
+     * Initializes and starts all components of the RelayServer in the correct order.
+     */
     public void startServer() {
-        System.out.println("HelpHub Relay Server starting on port " + PORT + "...");
+        configureLogger();
+        logger.info("HelpHub Relay Server starting...");
 
+        startMDNSDiscovery();
+        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
+
+        try {
+            startWebServer();
+        } catch (Exception e) {
+            logger.error("FATAL: Could not start web server. Exiting.", e);
+            System.exit(1);
+        }
+
+        setupSSL();
+        startConnectionCleanupTask();
+        new Thread(new AdminConsole()).start();
+        logger.info("CLI Admin console started. Type 'help' for commands.");
+        startAdminDataListener();
+
+        logServerAddresses();
+        startClientListener();
+    }
+
+    /**
+     * Configures the SLF4J SimpleLogger for consistent, timestamped output.
+     */
+    private void configureLogger() {
+        System.setProperty("org.slf4j.simpleLogger.dateTimeFormat", "yyyy-MM-dd HH:mm:ss:SSS");
+        System.setProperty("org.slf4j.simpleLogger.showThreadName", "false");
+        System.setProperty("org.slf4j.simpleLogger.showLogName", "true");
+        System.setProperty("org.slf4j.simpleLogger.logFile", "System.out"); // Direct all logs to the console
+    }
+
+    /**
+     * Starts the embedded Jetty web server and configures it to serve static files and WebSockets.
+     */
+    private void startWebServer() throws Exception {
+        webServer = new Server(WEB_PORT);
+
+        ResourceHandler resourceHandler = new ResourceHandler();
+        resourceHandler.setResourceBase(Objects.requireNonNull(this.getClass().getClassLoader().getResource("webapp")).toExternalForm());
+        resourceHandler.setWelcomeFiles(new String[]{"index.html"});
+
+        ServletContextHandler servletContextHandler = new ServletContextHandler(ServletContextHandler.SESSIONS);
+        servletContextHandler.setContextPath("/");
+        JettyWebSocketServletContainerInitializer.configure(servletContextHandler, (context, wsContainer) ->
+                wsContainer.addMapping("/chat", (req, res) -> new WebSocketHandler())
+        );
+        WebSocketHandler.configure(this);
+
+        webServer.setHandler(new HandlerList(resourceHandler, servletContextHandler));
+        webServer.start();
+        logger.info("Web server started on http://localhost:{}", WEB_PORT);
+    }
+
+    /**
+     * Starts the mDNS service to broadcast the server's presence as 'helphub.local'.
+     */
+    private void startMDNSDiscovery() {
+        try {
+            jmdns = JmDNS.create(InetAddress.getLocalHost());
+            ServiceInfo serviceInfo = ServiceInfo.create("_http._tcp.local.", "helphub", WEB_PORT, "HelpHub Emergency Chat");
+            jmdns.registerService(serviceInfo);
+            logger.info("mDNS service registered. Server may be discoverable at 'helphub.local'");
+        } catch (IOException e) {
+            logger.warn("Could not start mDNS service. Server only accessible via IP.", e);
+        }
+    }
+
+    /**
+     * Sets up the necessary system properties for SSL/TLS using the keystore file.
+     * Fails fast if the required password is not provided as an environment variable.
+     */
+    private void setupSSL() {
         String keyStorePassword = System.getenv("KEYSTORE_PASSWORD");
-        if (keyStorePassword == null) {
-            System.err.println("FATAL: KEYSTORE_PASSWORD environment variable not set.");
+        if (keyStorePassword == null || keyStorePassword.isBlank()) {
+            logger.error("FATAL: KEYSTORE_PASSWORD environment variable not set. Exiting.");
             System.exit(1);
         }
         System.setProperty("javax.net.ssl.keyStore", "helphub.keystore");
         System.setProperty("javax.net.ssl.keyStorePassword", keyStorePassword);
+    }
 
-        startConnectionCleanupTask();
-        Thread adminConsoleThread = new Thread(new AdminConsole());
-        adminConsoleThread.setDaemon(true);
-        adminConsoleThread.start();
-        System.out.println("Admin console started. Type 'help' for a list of commands.");
-        startAdminDataListener();
+    /**
+     * Starts the main server loop to listen for and accept secure connections from TCP clients.
+     */
+    private void startClientListener() {
         try {
             SSLServerSocketFactory ssf = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
             try (SSLServerSocket serverSocket = (SSLServerSocket) ssf.createServerSocket(PORT)) {
-                System.out.println("Server is listening for secure client connections.");
+                logger.info("Server is listening for secure client connections on port {}", PORT);
                 while (true) {
                     SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
-                    ClientHandler handler = new ClientHandler(clientSocket);
-                    new Thread(handler).start();
+                    new Thread(new ClientHandler(clientSocket)).start();
                 }
             }
         } catch (IOException e) {
-            System.err.println("Error in server socket listener: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error in main server socket listener. The server may have stopped.", e);
         }
     }
 
+    /**
+     * Starts a background thread to listen for unencrypted connections from the admin dashboard.
+     */
     private void startAdminDataListener() {
         new Thread(() -> {
             try (ServerSocket adminSocket = new ServerSocket(ADMIN_PORT)) {
-                System.out.println("Dashboard listener started on port " + ADMIN_PORT);
+                logger.info("Dashboard listener started on port {}", ADMIN_PORT);
                 while (true) {
                     Socket dashboardConnection = adminSocket.accept();
                     new Thread(new AdminConnectionHandler(dashboardConnection)).start();
                 }
             } catch (IOException e) {
-                System.err.println("FATAL: Could not start dashboard listener: " + e.getMessage());
+                logger.error("FATAL: Could not start dashboard listener.", e);
             }
         }).start();
     }
 
+    /**
+     * Starts a scheduled task to periodically remove timed-out ("zombie") client connections.
+     */
     private void startConnectionCleanupTask() {
         long timeout = Config.getInt("connection.timeout", 45000);
         scheduler.scheduleAtFixedRate(() -> {
-            System.out.println("Running connection cleanup task...");
+            logger.debug("Running connection cleanup task...");
             long now = System.currentTimeMillis();
             clientHandlers.values().forEach(handler -> {
                 if (now - handler.getLastHeartbeatTime() > timeout) {
-                    System.out.println("Client '" + handler.getClientId() + "' timed out. Disconnecting.");
+                    logger.warn("Client '{}' timed out. Disconnecting.", handler.getClientId());
                     handler.disconnect();
                 }
             });
         }, timeout, timeout, TimeUnit.MILLISECONDS);
     }
 
-    private void routeMessage(Message message) {
-        String to = (message.getTo() == null) ? "ALL" : message.getTo();
-        System.out.printf("[MSG] [FROM:%s] -> [TO:%s]: %s%n", message.getFrom(), to, message.getBody());
+    /**
+     * The definitive, thread-safe method to check if a client ID is currently in use
+     * by either a TCP client or a Web client.
+     * @param clientId The ID to check.
+     * @return true if the ID is already taken, false otherwise.
+     */
+    public synchronized boolean isClientIdTaken(String clientId) {
+        boolean isTcpClient = clientHandlers.containsKey(clientId);
+        boolean isWebClient = WebSocketHandler.isClientConnected(clientId);
+        return isTcpClient || isWebClient;
+    }
+
+    /**
+     * The intelligent routing hub for all messages in the system.
+     * It logs, persists, and delivers messages to the correct recipients, whether they are TCP or Web clients,
+     * handling both online and offline cases.
+     * @param message The message to be routed.
+     */
+    public void routeMessageToAll(Message message) {
+        String fromId = message.getFrom();
+        String toId = message.getTo();
+
+        logger.info("[MSG] [FROM:{}] -> [TO:{}]: {}", fromId, (toId == null ? "ALL" : toId), message.getBody());
         database.storeMessage(message);
 
         if (message.getType() == Message.MessageType.DIRECT) {
-            ClientHandler handler = clientHandlers.get(message.getTo());
-            if (handler != null) {
-                handler.sendMessage(message.toJson());
-                System.out.println(" -> Delivered direct message to online client: " + message.getTo());
-            } else {
-                System.out.println(" -> Queued direct message for offline client: " + message.getTo());
+            boolean delivered = false;
+            // Attempt delivery to an online TCP client
+            ClientHandler tcpClient = clientHandlers.get(toId);
+            if (tcpClient != null) {
+                tcpClient.sendMessage(message.toJson());
+                logger.info(" -> Delivered direct message to online TCP client: {}", toId);
+                delivered = true;
             }
-        } else if (message.getType() == Message.MessageType.BROADCAST) {
+            // Attempt delivery to an online web client
+            if (WebSocketHandler.isClientConnected(toId)) {
+                WebSocketHandler.sendMessage(toId, message.toJson());
+                logger.info(" -> Delivered direct message to online web client: {}", toId);
+                delivered = true;
+            }
+            // If it wasn't delivered to anyone online, confirm it's queued for later
+            if (!delivered) {
+                logger.info(" -> Queued direct message for offline client: {}", toId);
+            }
+        } else { // BROADCAST messages
+            // Send to all TCP clients (except the sender, if they are a TCP client)
             for (ClientHandler handler : clientHandlers.values()) {
-                if (!handler.getClientId().equals(message.getFrom())) {
+                if (!handler.getClientId().equals(fromId)) {
                     handler.sendMessage(message.toJson());
                 }
             }
-            System.out.println(" -> Broadcast message sent to all online clients.");
+            // Send to all Web clients (except the sender, if they are a web client)
+            WebSocketHandler.broadcast(message.toJson(), fromId);
+            logger.info(" -> Broadcast message sent to all online clients.");
         }
     }
 
+    /**
+     * A graceful shutdown hook to clean up resources like mDNS when the server is terminated.
+     */
+    public void shutdown() {
+        logger.info("Shutting down HelpHub server...");
+        if (jmdns != null) {
+            jmdns.unregisterAllServices();
+            try {
+                jmdns.close();
+                logger.info("mDNS service unregistered.");
+            } catch (IOException e) {
+                logger.error("Error closing mDNS service.", e);
+            }
+        }
+        scheduler.shutdownNow();
+    }
+
+    /**
+     * Prints a user-friendly banner to the console with easy-to-use connection addresses for end-users.
+     */
+    private void logServerAddresses() {
+        logger.info("*********************************************************");
+        logger.info("* HELP HUB IS LIVE");
+        logger.info("*");
+        logger.info("* Tell users to connect their phone to this Wi-Fi and");
+        logger.info("* open their browser to ONE of the following addresses:");
+        logger.info("*");
+        logger.info("* Plan A (Easy): http://helphub.local:8080");
+        logger.info("* Plan B (Fallback IPs):");
+        try {
+            Enumeration<NetworkInterface> nets = NetworkInterface.getNetworkInterfaces();
+            for (NetworkInterface netint : Collections.list(nets)) {
+                if (!netint.isUp() || netint.isLoopback() || netint.isVirtual()) continue;
+                for (InetAddress inetAddress : Collections.list(netint.getInetAddresses())) {
+                    if (inetAddress instanceof java.net.Inet4Address && inetAddress.isSiteLocalAddress()) {
+                        logger.info("*     http://{}:{}", inetAddress.getHostAddress(), WEB_PORT);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Could not determine local IP addresses.", e);
+        }
+        logger.info("*");
+        logger.info("*********************************************************");
+    }
+
+    // --------------------- INNER CLASSES ----------------------
+
+    /** Handles a single, dedicated connection for a command-line (TCP) client. */
     private class ClientHandler implements Runnable {
         private final Socket clientSocket;
         private String clientId;
@@ -135,55 +331,49 @@ public class RelayServer {
                 if (clientSocket instanceof SSLSocket) {
                     ((SSLSocket) clientSocket).startHandshake();
                 }
-
                 this.lastHeartbeatTime = System.currentTimeMillis();
                 this.writer = new PrintWriter(clientSocket.getOutputStream(), true);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-
                 this.clientId = reader.readLine();
-                if (clientId == null || clientId.trim().isEmpty()) {
-                    System.err.println("Client connected but failed to send a valid ID. Closing connection.");
+                if (clientId == null || clientId.trim().isEmpty() || isClientIdTaken(clientId)) {
+                    logger.warn("Client disconnected: Invalid or duplicate ID provided ('{}').", clientId);
+                    writer.println("ERROR: ID is invalid or already in use.");
                     return;
                 }
-
                 clientHandlers.put(this.clientId, this);
                 database.updateClientLastSeen(clientId);
-                System.out.println("Client '" + this.clientId + "' connected. Checking for pending messages...");
+                logger.info("Client '{}' connected. Checking for pending messages...", this.clientId);
                 flushPendingMessages();
-
                 String jsonMessage;
                 while ((jsonMessage = reader.readLine()) != null) {
                     this.lastHeartbeatTime = System.currentTimeMillis();
                     Message message = Message.fromJson(jsonMessage);
                     if (message == null) continue;
-
                     if (message.getType() == Message.MessageType.HEARTBEAT) {
                         database.updateClientLastSeen(clientId);
                     } else if (message.getType() == Message.MessageType.ACK) {
                         database.updateMessageStatus(message.getBody(), "DELIVERED");
                     } else {
-                        routeMessage(message);
+                        routeMessageToAll(message);
                     }
                 }
             } catch (IOException e) {
-                System.out.println("Connection lost for client '" + (clientId != null ? clientId : "UNKNOWN") + "': " + e.getMessage());
+                logger.warn("Connection lost for client '{}': {}", (clientId != null ? clientId : "UNKNOWN"), e.getMessage());
             } finally {
                 disconnect();
             }
         }
-
         public void disconnect() {
             if (this.clientId != null) {
                 clientHandlers.remove(this.clientId);
-                System.out.println("Client '" + this.clientId + "' disconnected. Total clients: " + clientHandlers.size());
+                logger.info("Client '{}' disconnected. Total clients: {}", this.clientId, clientHandlers.size());
             }
-            try { if (!clientSocket.isClosed()) clientSocket.close(); } catch (IOException e) { /* ignore */ }
+            try { if (!clientSocket.isClosed()) clientSocket.close(); } catch (IOException ignore) {}
         }
-
         private void flushPendingMessages() {
             List<Message> pending = database.getPendingMessagesForClient(clientId);
             if (!pending.isEmpty()) {
-                System.out.println("Sending " + pending.size() + " pending messages to " + clientId);
+                logger.info("Sending {} pending messages to {}", pending.size(), clientId);
                 for (Message msg : pending) {
                     sendMessage(msg.toJson());
                 }
@@ -191,92 +381,68 @@ public class RelayServer {
         }
     }
 
-    /**
-     * Handles a single dashboard connection, responding to data requests.
-     * NOW INCLUDES an authentication check.
-     */
+    /** Handles a single connection for the JavaFX Admin Dashboard, serving JSON data and executing commands. */
     private class AdminConnectionHandler implements Runnable {
         private final Socket dashboardSocket;
-
         public AdminConnectionHandler(Socket socket) { this.dashboardSocket = socket; }
-
         @Override
         public void run() {
             try (
                     BufferedReader reader = new BufferedReader(new InputStreamReader(dashboardSocket.getInputStream()));
                     PrintWriter writer = new PrintWriter(dashboardSocket.getOutputStream(), true)
             ) {
-                // --- NEW: SECURITY CHECK ---
                 String providedPassword = reader.readLine();
                 String expectedPassword = System.getenv("ADMIN_PASSWORD");
-
                 if (expectedPassword == null || expectedPassword.isEmpty() || !expectedPassword.equals(providedPassword)) {
-                    System.out.println("Dashboard connection failed: Invalid admin password.");
+                    logger.warn("Dashboard connection failed: Invalid admin password.");
                     writer.println("ERROR:AUTH_FAILED");
-                    return; // Close the connection
+                    return;
                 }
-                // --- END SECURITY CHECK ---
-
                 String commandLine = reader.readLine();
                 if (commandLine == null) return;
-
-                String[] parts = commandLine.split("\\s+", 2); // Split into command and the rest
+                String[] parts = commandLine.split("\\s+", 2);
                 String command = parts[0];
-
                 switch (command) {
-                    case "GET_DATA":
-                        writer.println(buildStateAsJson());
-                        break;
-                    case "GET_PENDING":
+                    case "GET_DATA" -> writer.println(buildStateAsJson());
+                    case "GET_PENDING" -> {
                         if (parts.length > 1) writer.println(buildPendingMessagesAsJson(parts[1]));
-                        break;
-                    case "ADMIN_BROADCAST":
+                    }
+                    case "ADMIN_BROADCAST" -> {
                         if (parts.length > 1) handleAdminBroadcast(parts[1]);
-                        break;
-                    case "ADMIN_KICK":
+                    }
+                    case "ADMIN_KICK" -> {
                         if (parts.length > 1) handleAdminKick(parts[1]);
-                        break;
+                    }
                 }
             } catch (IOException e) {
-                System.out.println("Dashboard disconnected.");
+                logger.info("Dashboard disconnected.");
             }
         }
-
         private void handleAdminBroadcast(String messageBody) {
-            System.out.println("[ADMIN] Broadcasting message: " + messageBody);
+            logger.info("[ADMIN] Broadcasting message: {}", messageBody);
             Message adminMessage = new Message(Message.MessageType.BROADCAST, "_admin_", null, messageBody, Priority.HIGH);
-            // Use the server's main routing logic to send and store the message
-            routeMessage(adminMessage);
+            routeMessageToAll(adminMessage);
         }
-
         private void handleAdminKick(String clientId) {
-            System.out.println("[ADMIN] Kicking client: " + clientId);
+            logger.info("[ADMIN] Kicking client: {}", clientId);
             ClientHandler handler = clientHandlers.get(clientId);
             if (handler != null) {
-                handler.disconnect(); // Gracefully disconnect the client
+                handler.disconnect();
             } else {
-                System.out.println(" -> Client '" + clientId + "' not found or already disconnected.");
+                logger.info(" -> Client '{}' not found or already disconnected.", clientId);
             }
         }
-
         private String buildStateAsJson() {
             StringBuilder json = new StringBuilder();
             json.append("{");
-            // Stats
             json.append("\"stats\":{");
-            json.append("\"onlineClients\":").append(clientHandlers.size()).append(",");
+            json.append("\"onlineClients\":").append(clientHandlers.size() + WebSocketHandler.getConnectedClientIds().size()).append(",");
             json.append("\"pendingMessages\":").append(database.getPendingMessageCount());
             json.append("},");
-            // Clients
             json.append("\"clients\":[");
             List<String> clientEntries = new ArrayList<>();
-            clientHandlers.values().forEach(handler -> {
-                clientEntries.add(String.format(
-                        "{\"clientId\":\"%s\",\"lastSeen\":%d}",
-                        handler.getClientId(), handler.getLastHeartbeatTime()
-                ));
-            });
-
+            clientHandlers.values().forEach(handler -> clientEntries.add(String.format("{\"clientId\":\"%s\",\"type\":\"TCP\",\"lastSeen\":%d}", handler.getClientId(), handler.getLastHeartbeatTime())));
+            WebSocketHandler.getConnectedClientIds().forEach(clientId -> clientEntries.add(String.format("{\"clientId\":\"%s\",\"type\":\"Web\",\"lastSeen\":%d}", clientId, System.currentTimeMillis())));
             json.append(String.join(",", clientEntries));
             json.append("],");
             json.append("\"clientsWithPending\":[");
@@ -288,7 +454,6 @@ public class RelayServer {
             json.append("}");
             return json.toString();
         }
-
         private String buildPendingMessagesAsJson(String clientId) {
             List<Message> pending = database.getPendingMessagesForClient(clientId);
             StringBuilder json = new StringBuilder();
@@ -296,10 +461,7 @@ public class RelayServer {
             List<String> msgEntries = new ArrayList<>();
             pending.forEach(msg -> {
                 String safeBody = msg.getBody().replace("\"", "\\\"");
-                msgEntries.add(String.format(
-                        "{\"from\":\"%s\",\"priority\":\"%s\",\"body\":\"%s\"}",
-                        msg.getFrom(), msg.getPriority(), safeBody
-                ));
+                msgEntries.add(String.format("{\"from\":\"%s\",\"priority\":\"%s\",\"body\":\"%s\"}", msg.getFrom(), msg.getPriority(), safeBody));
             });
             json.append(String.join(",", msgEntries));
             json.append("]");
@@ -307,6 +469,7 @@ public class RelayServer {
         }
     }
 
+    /** Handles blocking input from the server's own console for CLI admin commands. */
     private class AdminConsole implements Runnable {
         @Override
         public void run() {
@@ -321,72 +484,59 @@ public class RelayServer {
                         case "/clients", "clients" -> handleListClients();
                         case "/pending", "pending" -> {
                             if (parts.length > 1) handleListPending(parts[1]);
-                            else System.out.println("Usage: /pending <clientId>");
+                            else logger.info("Usage: /pending <clientId>");
                         }
                         case "/tail", "tail" -> {
-                            int count = (parts.length > 1) ? Integer.parseInt(parts[1]) : 10;
-                            handleTailLogs(count);
+                            try {
+                                int count = (parts.length > 1) ? Integer.parseInt(parts[1]) : 10;
+                                handleTailLogs(count);
+                            } catch (NumberFormatException e) { logger.warn("Invalid number for tail command."); }
                         }
                         case "/help", "help" -> printHelp();
-                        default -> System.out.println("Unknown command. Type 'help' for a list of commands.");
+                        default -> logger.warn("Unknown command. Type 'help' for a list of commands.");
                     }
                 }
             } catch (IOException e) {
-                System.err.println("Admin console encountered an error: " + e.getMessage());
+                logger.error("Admin console encountered an error.", e);
             }
         }
         private void printHelp() {
-            System.out.println("\n--- HelpHub Admin Console Commands ---");
-            System.out.println(" /stats                  - Show server statistics.");
-            System.out.println(" /clients                - List all currently connected clients.");
-            System.out.println(" /pending <clientId>     - List pending messages for a specific client.");
-            System.out.println(" /tail <n>               - Show the last <n> lines of the message log file.");
-            System.out.println(" help                    - Show this help message.");
-            System.out.println("--------------------------------------\n");
+            logger.info("\n--- HelpHub Admin Console Commands ---\n" +
+                    " /stats                  - Show server statistics.\n" +
+                    " /clients                - List all currently connected clients.\n" +
+                    " /pending <clientId>     - List pending messages for a specific client.\n" +
+                    " /tail <n>               - Show the last <n> lines of the message log file.\n" +
+                    " help                    - Show this help message.\n" +
+                    "--------------------------------------\n");
         }
         private void handleStats() {
-            System.out.println("\n--- Server Statistics ---");
-            System.out.printf(" Online Clients: %d%n", clientHandlers.size());
-            System.out.printf(" Pending Messages: %d%n", database.getPendingMessageCount());
-            System.out.printf(" Total Messages Stored: %d%n", database.getTotalMessageCount());
-            System.out.println("-------------------------\n");
+            logger.info("\n--- Server Statistics ---\n Online Clients: {}\n Pending Messages: {}\n Total Messages Stored: {}\n-------------------------\n",
+                    clientHandlers.size() + WebSocketHandler.getConnectedClientIds().size(),
+                    database.getPendingMessageCount(),
+                    database.getTotalMessageCount());
         }
         private void handleListClients() {
-            System.out.println("\n--- Online Clients (" + clientHandlers.size() + ") ---");
-            if (clientHandlers.isEmpty()) {
-                System.out.println(" No clients are currently connected.");
-            } else {
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
-                System.out.printf(" %-20s | %-15s%n", "Client ID", "Last Activity");
-                System.out.println("----------------------------------------");
-                clientHandlers.values().forEach(h -> System.out.printf(" %-20s | %-15s%n", h.getClientId(), formatter.format(Instant.ofEpochMilli(h.getLastHeartbeatTime()))));
-            }
-            System.out.println("----------------------------------------\n");
+            logger.info("\n--- Online Clients ({}) ---", clientHandlers.size() + WebSocketHandler.getConnectedClientIds().size());
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
+            logger.info(String.format(" %-25s | %-8s | %-15s", "Client ID", "Type", "Last Activity"));
+            clientHandlers.values().forEach(h -> logger.info(String.format(" %-25s | %-8s | %-15s", h.getClientId(), "TCP", formatter.format(Instant.ofEpochMilli(h.getLastHeartbeatTime())))));
+            WebSocketHandler.getConnectedClientIds().forEach(id -> logger.info(String.format(" %-25s | %-8s | %-15s", id, "Web", "N/A")));
+            logger.info("--------------------------------------------------\n");
         }
         private void handleListPending(String clientId) {
             List<Message> pending = database.getPendingMessagesForClient(clientId);
-            System.out.println("\n--- Pending Messages for '" + clientId + "' (" + pending.size() + ") ---");
+            logger.info("\n--- Pending Messages for {} ({} found) ---", clientId, pending.size());
             if (pending.isEmpty()) {
-                System.out.println(" No pending messages for this client.");
+                logger.info(" No pending messages.");
             } else {
-                pending.forEach(msg -> System.out.printf("  From: %-15s | Prio: %-6s | Body: %s%n", msg.getFrom(), msg.getPriority(), msg.getBody()));
+                pending.forEach(msg -> logger.info(" From: {} | Prio: {} | Body: {}", msg.getFrom(), msg.getPriority(), msg.getBody()));
             }
-            System.out.println("--------------------------------------------------\n");
+            logger.info("----------------------------------------\n");
         }
         private void handleTailLogs(int count) {
-            System.out.println("\n--- Last " + count + " Lines of " + LOG_FILE_PATH + " ---");
-            File logFile = new File(LOG_FILE_PATH);
-            if (!logFile.exists()) {
-                System.out.println(" Log file does not exist yet.");
-                return;
-            }
-            try {
-                List<String> allLines = new ArrayList<>(java.nio.file.Files.readAllLines(logFile.toPath()));
-                allLines.stream().skip(Math.max(0, allLines.size() - count)).forEach(System.out::println);
-            } catch (IOException e) {
-                System.err.println("Error reading log file: " + e.getMessage());
-            }
-            System.out.println("--------------------------------------------------\n");
+            // This method is intentionally left simple as a real-world implementation
+            // would use a more robust log file management strategy.
+            logger.info("The /tail command is a basic feature. For production, please view the log files directly or use a dedicated log aggregator.");
         }
     }
 }

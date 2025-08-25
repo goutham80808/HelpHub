@@ -1,38 +1,141 @@
-# 🚨 HelpHub (Command-Line Edition)
+# HelpHub v2.0
 
-**HelpHub** is a **disaster-resilient, offline-first communication system** built in Java.
-It runs entirely on a local Wi-Fi hotspot or LAN  **no Internet required**  enabling survivors and rescue workers to send and receive messages when conventional networks are down.
-
----
-
-##  Features
-
-1. **Offline-First Communication**
-   Works over any local network (LAN/Hotspot) with **zero Internet dependency**.
-
-2. **End-to-End Security**
-   Secured with **TLS encryption**, preventing eavesdropping.
-
-3. **Guaranteed Messaging**
-   Embedded **SQLite store-and-forward queue** ensures delivery once recipients reconnect.
-
-4. **Reliable Connections**
-   Automatic client reconnect with **exponential backoff** and server-side cleanup of dead sessions.
-
-5. **Priority System**
-   High-priority alerts (e.g., `/sos`) are always delivered before normal messages.
-
-6. **Admin Console**
-   Built-in CLI for real-time monitoring: connected clients, message queues, and system logs.
+HelpHub is a **disaster-resilient, offline-first communication system** built in Java. It operates entirely on a **local Wi-Fi hotspot or LAN**, without Internet dependency, enabling **survivors and rescue workers** to send and receive messages when conventional networks are down.
 
 ---
 
-## Build Instructions
+## Table of Contents
+
+1. [Core Principles](#1-core-principles)
+2. [System Architecture](#2-system-architecture)
+3. [Communication Flow & Protocols](#3-communication-flow--protocols)
+4. [Persistence & Security Model](#4-persistence--security-model)
+5. [Project Structure](#5-project-structure)
+6. [Build & Setup (Developers)](#6-build--setup-developers)
+7. [Running the System (Operators & End Users)](#7-running-the-system-operators--end-users)
+8. [Key Components (Code Tour)](#8-key-components-code-tour)
+
+---
+
+## 1. Core Principles
+
+* **Offline-First:** Works fully without Internet; all communication is LAN-based.
+* **Lightweight & Dependency-Free:** Built on standard Java (Sockets, Threads, JDBC) with minimal libs (Jetty, SLF4J). No heavy frameworks like Spring.
+* **Resilience > Consistency:** At-least-once delivery with guaranteed persistence, even if the server crashes.
+* **Multi-Platform:** Two client types:
+
+    * Secure CLI (Java, TLS) for responders
+    * Web client (browser) for survivors
+* **Security-Focused:** TLS-encrypted transport for CLI clients; threat model assumes passive eavesdropping protection.
+
+---
+
+## 2. System Architecture
+
+```
+                               +--------------------------------------------+
+                               |         HelpHub Relay Server (Java)        |
+                               |                                            |
+                               |  +--------------------------------------+  |
+                               |  |      Core Logic (Message Router)     |  |
+                               |  +--------------------------------------+  |
+                               |       |                |                 |
++----------------------------> | Port 5000          | Port 8080         | Port 5001
+| (TCP/TLS)                    | (Secure TCP)       | (HTTP & WS)       | (Plain TCP)
+|                              |                    |                   |
+|                              | ClientHandler      | WebSocketHandler  | AdminConnectionHandler
+|                              +--------------------+-------------------+--------------------+
+|                                      |                    |                   |            |
+|                                      +--------------------+-------------------+            |
+|                                                           |                                |
+|                                             +-------------v-------------+                  |
+|                                             |   Persistence (SQLite DB)   |                  |
+|                                             +-----------------------------+                  |
+|                                                                                            |
++-----------------+            +-----------------+             +-----------------+           |
+|   CLI Client    |            |   CLI Client    |             |   Web Client    | <---------+
+| (Laptop, Java)  |            | (Laptop, Java)  |             | (Phone Browser) |           
++-----------------+            +-----------------+             +-----------------+           
+                                                                                            
+                                                     +---------------------------------------+
+                                                     |        JavaFX Dashboard               |
+                                                     |        (Coordinator)                  |
+                                                     +---------------------------------------+
+```
+
+---
+
+## 3. Communication Flow & Protocols
+
+### 3.1 Client Registration
+
+* **CLI (TCP/TLS):** First message = plain-text client ID. If taken, server rejects.
+* **Web Client (WebSocket):** First JSON message = `STATUS` with ID. If taken, server rejects.
+
+### 3.2 Message Routing
+
+All messages pass through `RelayServer.routeMessageToAll()`:
+
+1. Persist to SQLite (`PENDING`)
+2. Route depending on type:
+
+    * **DIRECT:** Send to recipient if connected (TCP/WebSocket). Otherwise kept `PENDING`.
+    * **BROADCAST / SOS:** Sent to all clients except sender.
+
+### 3.3 Offline Handling
+
+* **Store-and-Forward:** All messages stored before routing.
+* **ACK:** Clients confirm receipt → DB updated to `DELIVERED`.
+* **Replay on Connect:** Pending messages replayed in priority order.
+
+### 3.4 Admin Protocol (Port 5001)
+
+1. Dashboard sends password
+2. Dashboard sends command (e.g., `GET_DATA`, `ADMIN_KICK alpha`)
+3. Server replies with confirmation / JSON blob
+
+---
+
+## 4. Persistence & Security Model
+
+### Persistence
+
+* **`messages`**: Stores full message objects with status + priority
+* **`clients`**: Tracks known clients + last seen
+* **`schema_version`**: Schema migrations
+
+### Security
+
+* **Threat Model:** Protects against passive Wi-Fi sniffing
+* **CLI Clients:** TLS v1.3 over `SSLSocket`
+* **Keystore:** Self-signed cert (`helphub.keystore`) used by both server + CLI clients
+* **Admin:** Password-authenticated, plain TCP
+* **Limitations:** Web clients use `ws://` (unencrypted); malicious authenticated clients not prevented
+
+---
+
+## 5. Project Structure
+
+```
+src/main/java/com/helphub/
+├── common/       # Shared models & utilities
+├── client/       # Command-line client
+├── server/       # Relay server + WebSocket support
+├── dashboard/    # JavaFX monitoring dashboard
+├── security/     # TLS keystore generator
+```
+
+* **resources/webapp/** → Web client (HTML/JS)
+* **test/** → JUnit tests
+
+---
+
+## 6. Build & Setup (Developers)
 
 ### Prerequisites
 
-* Java **17+**
-* [Apache Maven](https://maven.apache.org/)
+* Java 17+
+* Apache Maven
 
 ### Build
 
@@ -40,99 +143,78 @@ It runs entirely on a local Wi-Fi hotspot or LAN  **no Internet required**  enab
 mvn clean package
 ```
 
-This generates a self-contained executable JAR at:
+Produces executable JAR → `target/helphub-0.1.0.jar`
 
-```
-target/helphub-0.1.0.jar
-```
-
----
-
-##  TLS Security Setup (One-Time)
-
-Before first run, generate the self-signed certificate:
-
-**Linux/macOS or CMD**
+### One-Time TLS Keystore
 
 ```bash
+# PowerShell
+mvn exec:java "-Dexec.mainClass=com.helphub.security.KeyUtil"
+
+# Linux/macOS
 mvn exec:java -Dexec.mainClass="com.helphub.security.KeyUtil"
 ```
 
-**PowerShell**
-
-```powershell
-mvn exec:java "-Dexec.mainClass=com.helphub.security.KeyUtil"
-```
-
-This creates a keystore file:
-
-```
-helphub.keystore
-```
-
-Both server and clients require this file.
+Generates `helphub.keystore` for server + CLI clients.
 
 ---
 
-##  Running HelpHub
+## 7. Running the System (Operators & End Users)
 
-### 1. Start the Server
-
-Find your machine’s local IP (e.g., `192.168.1.10`).
-Set the keystore password as an environment variable:
-
-**Linux/macOS**
+### 7.1 Start the Server
 
 ```bash
+# Linux/macOS
 export KEYSTORE_PASSWORD="HelpHubPassword"
 java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
-```
 
-**Windows (PowerShell)**
-
-```powershell
+# PowerShell
 $env:KEYSTORE_PASSWORD="HelpHubPassword"
 java -cp target/helphub-0.1.0.jar com.helphub.server.RelayServer
 ```
 
----
+Server prints banner with **`helphub.local`** and **fallback IP**.
 
-### 2. Run a Client
+### 7.2 Connect as Web Client
 
-Copy these files from the server machine to each client to the same directory:
+* Connect phone to same Wi-Fi
+* Open browser → `http://helphub.local:8080` (or fallback IP)
+* If the easy address doesn't work, use the fallback IP address that the coordinator announced from the server's screen. 
+* The chat interface will load, assign a memorable name (e.g., Brave-Lion), and be ready to use.
+
+
+### 7.3 Connect as CLI Client
+
+Copy these files to client machine:
 
 * `target/helphub-0.1.0.jar`
 * `helphub.keystore`
 
-Start a client (replace `<server-ip>` with the server address):
+Run:
 
 ```bash
-java -cp helphub-0.1.0.jar com.helphub.client.Client --id alpha --server 192.168.1.10
+java -cp helphub-0.1.0.jar com.helphub.client.Client --id alpha --server 192.168.43.101
+```
+
+### 7.4 Run the Dashboard
+
+```bash
+# Set admin password
+export ADMIN_PASSWORD="YourSecretAdminPassword"
+
+# Start dashboard
+mvn javafx:run -Dadmin.password="YourSecretAdminPassword"
 ```
 
 ---
 
-##  Usage Guide
+## 8. Key Components (Code Tour)
 
-### Client Commands
-
-* `/to <recipientId> <message>` → Private message
-* `/all <message>` → Broadcast to all
-* `/sos <message>` → High-priority emergency alert
-
-### Admin Console (Server-Side)
-
-* `stats` → Show summary of online clients and message counts
-* `clients` → List connected clients
-* `pending <clientId>` → Show queued undelivered messages
-* `tail <n>` → Show last *n* log lines from `logs/messages.log`
-* `help` → Show all admin commands
-
----
-
-##  Notes
-
-* Works best on a **local Wi-Fi hotspot** without Internet.
-* Designed for **emergency communication** when mobile networks are down.
+* `RelayServer.java` → main server & routing logic
+* `Db.java` → SQLite persistence + migrations
+* `WebSocketHandler.java` → web client management
+* `Client.java` → CLI client entrypoint
+* `ConnectionManager.java` → CLI connection lifecycle
+* `KeyUtil.java` → TLS keystore generator
 
 ---
