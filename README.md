@@ -14,6 +14,7 @@ HelpHub is a **disaster-resilient, offline-first communication system** built in
 6. [Build & Setup (Developers)](#6-build--setup-developers)
 7. [Running the System (Operators & End Users)](#7-running-the-system-operators--end-users)
 8. [Key Components (Code Tour)](#8-key-components-code-tour)
+9. [Credits](#9-created-by)
 
 ---
 
@@ -218,3 +219,6 @@ mvn javafx:run -Dadmin.password="YourSecretAdminPassword"
 * `KeyUtil.java` → TLS keystore generator
 
 ---
+
+## 9. Created by
+- [Goutham Krishna Mandati](https://x.com/goutham_808)

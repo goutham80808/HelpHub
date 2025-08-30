@@ -121,7 +121,7 @@ public class Message {
             long finalTimestamp = (timestampStr != null) ? Long.parseLong(timestampStr) : System.currentTimeMillis();
             Priority finalPriority = (priorityStr != null) ? Priority.fromLevel(Integer.parseInt(priorityStr)) : Priority.NORMAL;
             if (to != null && to.equals("null")) to = null;
-
+            // calling the private internal constructor
             return new Message(finalId, MessageType.valueOf(typeStr), from, to, finalTimestamp, body, finalPriority);
         } catch (Exception e) {
             // In a production system, this would use the SLF4J logger.

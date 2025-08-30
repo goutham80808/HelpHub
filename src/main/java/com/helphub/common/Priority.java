@@ -39,7 +39,7 @@ public enum Priority {
      */
     public static Priority fromLevel(int level) {
         // Iterate through all possible enum values
-        for (Priority p : values()) {
+        for (Priority p : Priority.values()) {
             if (p.level == level) {
                 return p;
             }
