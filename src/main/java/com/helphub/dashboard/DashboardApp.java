@@ -230,7 +230,7 @@ public class DashboardApp extends Application {
                 String jsonResponse = sendAdminCommand("GET_PENDING " + clientId);
                 Platform.runLater(() -> {
                     List<String> messages = new ArrayList<>();
-                    Pattern msgPattern = Pattern.compile("\\{\"from\":\"(.*?)\",\"priority\":\"(.*?)\",\"body\":\"(.*?)\"\\}");
+                        Pattern msgPattern = Pattern.compile("\\{\"from\":\"(.*?)\",\"priority\":\"(.*?)\",\"body\":\"(.*?)\",\"timestamp\":(\\d+)(?:,\"deliveredTimestamp\":(\\d+))?\\}");
                     Matcher msgMatcher = msgPattern.matcher(jsonResponse);
                     while (msgMatcher.find()) {
                         messages.add(String.format("[%s] From %s: %s", msgMatcher.group(2), msgMatcher.group(1), msgMatcher.group(3)));

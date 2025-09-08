@@ -89,6 +89,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         websocket.onmessage = (event) => {
             const messageData = JSON.parse(event.data);
+            // Only display direct messages if this client is the recipient or sender
+            if (messageData.type === 'DIRECT') {
+                if (messageData.to !== clientId && messageData.from !== clientId) {
+                    return; // Ignore direct messages not meant for this client
+                }
+            }
             addMessage(messageData, false);
         };
 
@@ -134,8 +140,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (messageData.priority === 2) senderText += ' [SOS]';
         senderDiv.textContent = senderText;
 
+        // Add sent and delivered time info
+        const timeDiv = document.createElement('div');
+        timeDiv.classList.add('msg-times');
+        let sentTime = '';
+        if (messageData.timestamp) {
+            sentTime = new Date(messageData.timestamp).toISOString();
+        }
+        let deliveredTime = '';
+        if (messageData.deliveredTimestamp && messageData.deliveredTimestamp > 0) {
+            deliveredTime = new Date(messageData.deliveredTimestamp).toISOString();
+        }
+        let timeText = sentTime ? `Sent: ${sentTime}` : '';
+        if (deliveredTime) timeText += `\nDelivered: ${deliveredTime}`;
+        timeDiv.textContent = timeText;
+
         messageDiv.appendChild(senderDiv);
         messageDiv.appendChild(document.createTextNode(messageData.body));
+        if (timeText) messageDiv.appendChild(timeDiv);
 
         // Insert new messages at the top, which appears as the bottom due to CSS flex-direction.
         messagesDiv.insertBefore(messageDiv, messagesDiv.firstChild);

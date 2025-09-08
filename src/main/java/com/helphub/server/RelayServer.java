@@ -461,7 +461,16 @@ public class RelayServer {
             List<String> msgEntries = new ArrayList<>();
             pending.forEach(msg -> {
                 String safeBody = msg.getBody().replace("\"", "\\\"");
-                msgEntries.add(String.format("{\"from\":\"%s\",\"priority\":\"%s\",\"body\":\"%s\"}", msg.getFrom(), msg.getPriority(), safeBody));
+                String entry = String.format(
+                    "{\"from\":\"%s\",\"priority\":\"%s\",\"body\":\"%s\",\"timestamp\":%d",
+                    msg.getFrom(), msg.getPriority(), safeBody, msg.getTimestamp()
+                );
+                if (msg.getDeliveredTimestamp() > 0) {
+                    entry += String.format("\"deliveredTimestamp\":%d}", msg.getDeliveredTimestamp());
+                } else {
+                    entry += "}";
+                }
+                msgEntries.add(entry);
             });
             json.append(String.join(",", msgEntries));
             json.append("]");

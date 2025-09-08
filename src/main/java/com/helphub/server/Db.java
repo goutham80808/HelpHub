@@ -22,7 +22,8 @@ public class Db {
     private final Connection connection;
 
     /** The target schema version for the current codebase. Migrations will run until the DB matches this version. */
-    private static final int CURRENT_SCHEMA_VERSION = 2; // V1 was initial, V2 added the 'priority' column
+    // V1 was initial, V2 added 'priority', V3 adds 'delivered_timestamp'
+    private static final int CURRENT_SCHEMA_VERSION = 3;
 
     /**
      * Constructs a new Db instance using the default database file path.
@@ -69,15 +70,17 @@ public class Db {
             stmt.execute("CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);");
 
             // The main table for storing all message data.
-            stmt.execute("CREATE TABLE IF NOT EXISTS messages (" +
-                    " id TEXT PRIMARY KEY," +
-                    " from_client TEXT NOT NULL," +
-                    " to_client TEXT," + // Can be null for broadcast messages
-                    " type TEXT NOT NULL," +
-                    " timestamp INTEGER NOT NULL," +
-                    " body TEXT NOT NULL," +
-                    " status TEXT NOT NULL" +
-                    ");");
+        stmt.execute("CREATE TABLE IF NOT EXISTS messages (" +
+            " id TEXT PRIMARY KEY," +
+            " from_client TEXT NOT NULL," +
+            " to_client TEXT," + // Can be null for broadcast messages
+            " type TEXT NOT NULL," +
+            " timestamp INTEGER NOT NULL," +
+            " body TEXT NOT NULL," +
+            " status TEXT NOT NULL," +
+            " priority INTEGER NOT NULL DEFAULT 1," +
+            " delivered_timestamp INTEGER DEFAULT 0" +
+            ");");
 
             // A special table to track the current version of the database schema.
             stmt.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);");
@@ -120,7 +123,6 @@ public class Db {
                 stmt.execute("UPDATE schema_version SET version = 2");
                 logger.info("Migration to version 2 successful.");
             } catch (SQLException e) {
-                // This handles cases where the migration was partially run but failed to update the version number.
                 if (e.getMessage() != null && e.getMessage().contains("duplicate column name")) {
                     logger.warn("Column 'priority' already exists. Forcing schema version update to 2.");
                     try (Statement stmt = connection.createStatement()) {
@@ -132,8 +134,28 @@ public class Db {
                     logger.error("Failed to migrate database to version 2", e);
                 }
             }
+            dbVersion = 2;
         }
-        // --- Future migrations would be added here as `if (dbVersion < 3) { ... }` ---
+        // --- Migration to Version 3 ---
+        if (dbVersion < 3) {
+            logger.info("Applying migration to version 3: Adding 'delivered_timestamp' column to messages table...");
+            try (Statement stmt = this.connection.createStatement()) {
+                stmt.execute("ALTER TABLE messages ADD COLUMN delivered_timestamp INTEGER DEFAULT 0;");
+                stmt.execute("UPDATE schema_version SET version = 3");
+                logger.info("Migration to version 3 successful.");
+            } catch (SQLException e) {
+                if (e.getMessage() != null && e.getMessage().contains("duplicate column name")) {
+                    logger.warn("Column 'delivered_timestamp' already exists. Forcing schema version update to 3.");
+                    try (Statement stmt = connection.createStatement()) {
+                        stmt.execute("UPDATE schema_version SET version = 3");
+                    } catch (SQLException ex) {
+                        logger.error("Failed to force schema version update.", ex);
+                    }
+                } else {
+                    logger.error("Failed to migrate database to version 3", e);
+                }
+            }
+        }
     }
 
     /**
@@ -141,7 +163,7 @@ public class Db {
      * @param message The {@link Message} object to store.
      */
     public synchronized void storeMessage(Message message) {
-        String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, priority, status) VALUES(?,?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO messages(id, from_client, to_client, type, timestamp, body, priority, status, delivered_timestamp) VALUES(?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, message.getId());
             pstmt.setString(2, message.getFrom());
@@ -151,6 +173,7 @@ public class Db {
             pstmt.setString(6, message.getBody());
             pstmt.setInt(7, message.getPriority().level);
             pstmt.setString(8, "PENDING");
+            pstmt.setLong(9, message.getDeliveredTimestamp());
             pstmt.executeUpdate();
             logger.debug("Stored message {} from {}", message.getId(), message.getFrom());
         } catch (SQLException e) {
@@ -164,10 +187,20 @@ public class Db {
      * @param status The new status string.
      */
     public synchronized void updateMessageStatus(String messageId, String status) {
-        String sql = "UPDATE messages SET status = ? WHERE id = ?";
+        String sql;
+        if ("DELIVERED".equals(status)) {
+            sql = "UPDATE messages SET status = ?, delivered_timestamp = ? WHERE id = ?";
+        } else {
+            sql = "UPDATE messages SET status = ? WHERE id = ?";
+        }
         try (PreparedStatement pstmt = this.connection.prepareStatement(sql)) {
             pstmt.setString(1, status);
-            pstmt.setString(2, messageId);
+            if ("DELIVERED".equals(status)) {
+                pstmt.setLong(2, System.currentTimeMillis());
+                pstmt.setString(3, messageId);
+            } else {
+                pstmt.setString(2, messageId);
+            }
             pstmt.executeUpdate();
             logger.debug("Updated message {} status -> {}", messageId, status);
         } catch (SQLException e) {

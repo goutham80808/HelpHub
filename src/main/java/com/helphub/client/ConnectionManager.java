@@ -141,7 +141,13 @@ public class ConnectionManager {
         String prefix = message.getType() == Message.MessageType.DIRECT ? "(Direct) " : "";
         boolean isDelayed = (System.currentTimeMillis() - message.getTimestamp()) > 60000; // 60 seconds
         String delayedTag = isDelayed ? "(delayed) " : "";
+        String sentTime = java.time.Instant.ofEpochMilli(message.getTimestamp()).toString();
+        String deliveredTime = (message.getDeliveredTimestamp() > 0) ? java.time.Instant.ofEpochMilli(message.getDeliveredTimestamp()).toString() : null;
         System.out.println(delayedTag + prefix + "From " + message.getFrom() + ": " + message.getBody());
+        System.out.println("  Sent: " + sentTime);
+        if (deliveredTime != null) {
+            System.out.println("  Delivered: " + deliveredTime);
+        }
     }
 
     /**

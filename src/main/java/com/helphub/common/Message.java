@@ -34,6 +34,8 @@ public class Message {
     private final long timestamp;
     private final String body;
     private final Priority priority;
+    // New: when the message was delivered to the recipient (set on ACK, 0 if not delivered)
+    private final long deliveredTimestamp;
 
     /**
      * Creates a new message. This constructor is used when generating a new message from a client.
@@ -53,6 +55,7 @@ public class Message {
         this.timestamp = System.currentTimeMillis();
         this.body = body;
         this.priority = priority;
+        this.deliveredTimestamp = 0L;
     }
 
     /**
@@ -60,6 +63,11 @@ public class Message {
      * such as when deserializing from JSON or reading from the database.
      */
     private Message(String id, MessageType type, String from, String to, long timestamp, String body, Priority priority) {
+        this(id, type, from, to, timestamp, body, priority, 0L);
+    }
+
+    // New constructor with deliveredTimestamp
+    private Message(String id, MessageType type, String from, String to, long timestamp, String body, Priority priority, long deliveredTimestamp) {
         this.id = id;
         this.type = type;
         this.from = from;
@@ -67,6 +75,7 @@ public class Message {
         this.timestamp = timestamp;
         this.body = body;
         this.priority = priority;
+        this.deliveredTimestamp = deliveredTimestamp;
     }
 
     // --- Standard Getters ---
@@ -77,6 +86,7 @@ public class Message {
     public long getTimestamp() { return timestamp; }
     public String getBody() { return body; }
     public Priority getPriority() { return priority; }
+    public long getDeliveredTimestamp() { return deliveredTimestamp; }
 
     /**
      * Serializes the Message object into a JSON string.
@@ -85,9 +95,11 @@ public class Message {
      */
     public String toJson() {
         String safeBody = body.replace("\\", "\\\\").replace("\"", "\\\"");
+        // Only include deliveredTimestamp if it's set (nonzero)
+        String deliveredPart = deliveredTimestamp > 0 ? String.format(",\"deliveredTimestamp\":%d", deliveredTimestamp) : "";
         return String.format(
-                "{\"id\":\"%s\",\"type\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"timestamp\":%d,\"body\":\"%s\",\"priority\":%d}",
-                id, type, from, (to == null ? "null" : to), timestamp, safeBody, priority.level
+                "{\"id\":\"%s\",\"type\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"timestamp\":%d,\"body\":\"%s\",\"priority\":%d%s}",
+                id, type, from, (to == null ? "null" : to), timestamp, safeBody, priority.level, deliveredPart
         );
     }
 
@@ -115,14 +127,16 @@ public class Message {
             String to = extractValue(json, "to");
             String timestampStr = extractValue(json, "timestamp");
             String priorityStr = extractValue(json, "priority");
+            String deliveredTimestampStr = extractValue(json, "deliveredTimestamp");
 
             // Provide server-side defaults for missing optional fields.
             String finalId = (id != null) ? id : UUID.randomUUID().toString();
             long finalTimestamp = (timestampStr != null) ? Long.parseLong(timestampStr) : System.currentTimeMillis();
             Priority finalPriority = (priorityStr != null) ? Priority.fromLevel(Integer.parseInt(priorityStr)) : Priority.NORMAL;
+            long finalDeliveredTimestamp = (deliveredTimestampStr != null) ? Long.parseLong(deliveredTimestampStr) : 0L;
             if (to != null && to.equals("null")) to = null;
             // calling the private internal constructor
-            return new Message(finalId, MessageType.valueOf(typeStr), from, to, finalTimestamp, body, finalPriority);
+            return new Message(finalId, MessageType.valueOf(typeStr), from, to, finalTimestamp, body, finalPriority, finalDeliveredTimestamp);
         } catch (Exception e) {
             // In a production system, this would use the SLF4J logger.
             System.err.println("Failed to parse JSON message: " + json + " | Error: " + e.getMessage());
@@ -195,6 +209,12 @@ public class Message {
         String body = rs.getString("body");
         int priorityLevel = rs.getInt("priority");
         Priority priority = Priority.fromLevel(priorityLevel);
-        return new Message(id, type, from, to, timestamp, body, priority);
+        long deliveredTimestamp = 0L;
+        try {
+            deliveredTimestamp = rs.getLong("delivered_timestamp");
+        } catch (SQLException e) {
+            // Column may not exist yet (for backward compatibility)
+        }
+        return new Message(id, type, from, to, timestamp, body, priority, deliveredTimestamp);
     }
 }
