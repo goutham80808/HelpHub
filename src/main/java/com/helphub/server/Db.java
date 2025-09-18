@@ -141,6 +141,7 @@ public class Db {
             logger.info("Applying migration to version 3: Adding 'delivered_timestamp' column to messages table...");
             try (Statement stmt = this.connection.createStatement()) {
                 stmt.execute("ALTER TABLE messages ADD COLUMN delivered_timestamp INTEGER DEFAULT 0;");
+
                 stmt.execute("UPDATE schema_version SET version = 3");
                 logger.info("Migration to version 3 successful.");
             } catch (SQLException e) {

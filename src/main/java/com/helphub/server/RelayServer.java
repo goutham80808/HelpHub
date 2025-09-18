@@ -284,6 +284,8 @@ public class RelayServer {
 
     /**
      * Prints a user-friendly banner to the console with easy-to-use connection addresses for end-users.
+     * Only prints IPs that are likely reachable from other devices on the LAN.
+     * Filters out virtual, VPN, and container interfaces by name and broadcast capability.
      */
     private void logServerAddresses() {
         logger.info("*********************************************************");
@@ -294,20 +296,34 @@ public class RelayServer {
         logger.info("*");
         logger.info("* Plan A (Easy): http://helphub.local:8080");
         logger.info("* Plan B (Fallback IPs):");
+        boolean foundReachable = false;
+        List<String> excludedPatterns = Arrays.asList("vEthernet", "VirtualBox", "VMware", "Docker", "Loopback", "VPN");
         try {
             Enumeration<NetworkInterface> nets = NetworkInterface.getNetworkInterfaces();
             for (NetworkInterface netint : Collections.list(nets)) {
-                if (!netint.isUp() || netint.isLoopback() || netint.isVirtual()) continue;
+                String name = netint.getDisplayName();
+                boolean exclude = excludedPatterns.stream().anyMatch(pattern -> name != null && name.contains(pattern));
+                if (!netint.isUp() || netint.isLoopback() || netint.isVirtual() || exclude || !netint.supportsMulticast()) continue;
                 for (InetAddress inetAddress : Collections.list(netint.getInetAddresses())) {
                     if (inetAddress instanceof java.net.Inet4Address && inetAddress.isSiteLocalAddress()) {
-                        logger.info("*     http://{}:{}", inetAddress.getHostAddress(), WEB_PORT);
+                        try {
+                            // Test reachability with a short timeout
+                            if (inetAddress.isReachable(500)) {
+                                logger.info("*     http://{}:{}", inetAddress.getHostAddress(), WEB_PORT);
+                                foundReachable = true;
+                            }
+                        } catch (IOException ignored) {}
                     }
                 }
             }
         } catch (Exception e) {
             logger.error("Could not determine local IP addresses.", e);
         }
+        if (!foundReachable) {
+            logger.warn("*     No reachable IPs detected. Try using http://helphub.local:8080 or check your network interfaces.");
+        }
         logger.info("*");
+        logger.info("* Note: Some IPs may only work on the server machine due to network isolation or virtualization. Use the IP that matches your client device's subnet, or mDNS if available.");
         logger.info("*********************************************************");
     }
 
@@ -549,3 +565,4 @@ public class RelayServer {
         }
     }
 }
+
